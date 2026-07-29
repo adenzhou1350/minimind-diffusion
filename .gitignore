@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+# 大文件:语料与 tokenizer 不入库(用户从 minimind 自行放置)
+dataset/*.jsonl
+model/tokenizer.json
+model/tokenizer_config.json
+# checkpoint
+out/
+*.pth
+# 训练曲线
+images/*.png
