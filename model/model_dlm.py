@@ -288,11 +288,12 @@ class DLMForMD(PreTrainedModel):
             x[idx[:, 0], idx[:, 1]] = pred
             # 决定这轮重掩多少个:期望到时间 s 时还剩 floor(gen_length*s) 个被掩
             n_remain = int(gen_length * s)                      # 应剩多少个 <mask>
-            if 0 < n_remain < idx.shape[0]:
-                # conf 升序,n_remain 个最低置信的 -> 重掩回 <mask>(下轮重猜)
-                order = torch.argsort(conf)                     # 升序
-                remask_pos = idx[order[:n_remain]]             # [n_remain, 2]
+            # 总是重掩 conf 最低的 min(n_remain, 当前已揭开数) 个 -> 下轮重猜
+            # (比 guard 式更贴 LLaDA:不漏掉"该重掩"的步;最后一步 s=0 -> n_remain=0 -> 全固化)
+            n_remask = min(n_remain, idx.shape[0])
+            if n_remask > 0:
+                order = torch.argsort(conf)                    # 升序:低 -> 高
+                remask_pos = idx[order[:n_remask]]              # [n_remask, 2]
                 x[remask_pos[:, 0], remask_pos[:, 1]] = MASK_ID
-            # 其余已固化(不动);最后一步 k=T 时 s=0,n_remain=0 -> 不重掩 -> 全揭开
         # 4. 全部揭开,返回 response 区
         return x[:, P:]
