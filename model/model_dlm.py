@@ -244,3 +244,55 @@ class DLMForMD(PreTrainedModel):
         per_seq = (ce.sum(dim=1) / n_masked) * (1.0 / t)       # [B]
         loss = per_seq.mean()
         return DLMOutput(loss=loss, logits=logits)
+
+    # 🌏🌎🌍 扩散采样: 全 <mask> -> 迭代 unmasking + low-confidence remasking 🌏🌎🌍
+    @torch.inference_mode()
+    def generate(self, prompt_ids, gen_length=128, steps=64, temperature=0.0,
+                 low_confidence=True):
+        """
+        prompt_ids: [1, P] 干净 prompt
+        返回: [1, gen_length] response token(<mask> 全部揭开)
+        """
+        device = prompt_ids.device
+        MASK_ID = self.config.mask_token_id
+        P = prompt_ids.shape[1]
+        # 1. 构造 prompt + 全 <mask> 的 response
+        resp = torch.full((1, gen_length), MASK_ID, dtype=torch.long, device=device)
+        x = torch.cat([prompt_ids, resp], dim=1)              # [1, P+L]
+        attn = torch.ones_like(x)
+        # prompt 位永不重掩
+        is_prompt = torch.zeros_like(x, dtype=torch.bool)
+        is_prompt[:, :P] = True
+
+        T = steps
+        for k in range(1, T + 1):
+            s = 1.0 - k / T                                     # 目标"还剩多少比例被掩"
+            # 跑双向 transformer(整条)
+            h = self.model(x, attention_mask=attn)
+            logits = self.lm_head(h)                            # [1, P+L, V]
+            # 当前被掩的 response 位
+            masked = (x == MASK_ID) & (~is_prompt)             # [1, P+L]
+            idx = masked.nonzero(as_tuple=False)               # [N, 2]
+            if idx.shape[0] == 0:
+                break  # 全揭开了
+            # 这些位的 logits
+            lm_logits = logits[idx[:, 0], idx[:, 1]]           # [N, V]
+            temp = max(temperature, 1e-4)
+            prob = F.softmax(lm_logits / temp, dim=-1)
+            pred = prob.argmax(dim=-1)                          # [N]
+            if low_confidence:
+                conf = prob.gather(1, pred[:, None]).squeeze(1)  # [N]
+            else:
+                conf = torch.rand(idx.shape[0], device=device)
+            # 临时写回预测(全揭开当前剩余的 <mask>)
+            x[idx[:, 0], idx[:, 1]] = pred
+            # 决定这轮重掩多少个:期望到时间 s 时还剩 floor(gen_length*s) 个被掩
+            n_remain = int(gen_length * s)                      # 应剩多少个 <mask>
+            if 0 < n_remain < idx.shape[0]:
+                # conf 升序,n_remain 个最低置信的 -> 重掩回 <mask>(下轮重猜)
+                order = torch.argsort(conf)                     # 升序
+                remask_pos = idx[order[:n_remain]]             # [n_remain, 2]
+                x[remask_pos[:, 0], remask_pos[:, 1]] = MASK_ID
+            # 其余已固化(不动);最后一步 k=T 时 s=0,n_remain=0 -> 不重掩 -> 全揭开
+        # 4. 全部揭开,返回 response 区
+        return x[:, P:]
