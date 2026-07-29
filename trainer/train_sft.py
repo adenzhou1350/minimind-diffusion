@@ -42,7 +42,7 @@ def main():
     # ========== 3. 构造数据集 ==========
     ds = SFTDataset(args.data_path, tokenizer, max_length=args.max_seq_len)
     sampler = SkipBatchSampler(ds, args.batch_size)
-    loader = DataLoader(ds, batch_size=1, sampler=sampler, num_workers=4, pin_memory=True)
+    loader = DataLoader(ds, batch_sampler=sampler, num_workers=4, pin_memory=True)
 
     optim = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
     scaler = torch.amp.GradScaler('cuda', enabled=torch.cuda.is_available())
