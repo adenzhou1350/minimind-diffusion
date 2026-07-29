@@ -4,7 +4,7 @@
 > **扩散式语言模型 (Diffusion Language Model, DLM)** 上。
 > 本 spec 实现 LLaDA v1 全序列掩码扩散的完整训练 + 采样脊柱。
 
-- **状态**:设计已与用户确认,待实现
+- **状态**:Spec #1 已实现并冒烟通过(2026-07-29)
 - **日期**:2026-07-29
 - **作者**:Claude(与用户共同 brainstorm)
 - **项目根**:`D:\codes\mind-diffusion`
