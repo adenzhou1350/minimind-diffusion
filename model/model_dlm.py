@@ -179,3 +179,68 @@ class DLMModel(nn.Module):
         for layer in self.layers:
             h = layer(h, am, freqs)
         return self.norm(h)
+
+
+# 🌏🌎🌍 DLMForMD: 掩码 + 1/t 加权掩码 CE loss(time-free,不喂 t 给模型) 🌏🌎🌍
+from dataclasses import dataclass
+from transformers import PreTrainedModel
+from transformers.modeling_outputs import ModelOutput
+
+
+@dataclass
+class DLMOutput(ModelOutput):
+    loss: torch.Tensor = None
+    logits: torch.Tensor = None
+
+
+class DLMForMD(PreTrainedModel):
+    config_class = DLMConfig
+
+    def __init__(self, cfg):
+        super().__init__(cfg)
+        self.model = DLMModel(cfg)
+        # tied embedding: lm_head 与 embed 共享(跟 minimind 一致)
+        self.lm_head = nn.Linear(cfg.hidden_size, cfg.vocab_size, bias=False)
+        if cfg.tie_word_embeddings:
+            self._tie_or_clone_weights()
+        self.post_init()
+
+    def _tie_or_clone_weights(self):
+        # transformers v5: PreTrainedModel.tie_weights() 接受 recompute_mapping 等参数,
+        # 直接覆盖会破坏父类调用契约。这里只用最小方式绑定 lm_head.weight = embed.weight。
+        self.lm_head.weight = self.model.embed.weight
+
+    def forward(self, input_ids, attention_mask=None, response_mask=None, labels=None):
+        x_0 = labels if labels is not None else input_ids      # 干净目标
+        B, L = x_0.shape
+        device = x_0.device
+        MASK_ID = self.config.mask_token_id
+        V = self.config.vocab_size
+
+        # 1. 每序列采掩码比例 t,夹 [1e-4, 1] 防除零
+        t = torch.empty(B, device=device).uniform_(1e-4, 1.0)
+
+        # 2. 可掩范围:真实 token(非 pad);SFT 时再 & response_mask
+        maskable = attention_mask.bool() if attention_mask is not None \
+            else torch.ones(B, L, dtype=torch.bool, device=device)
+        if response_mask is not None:
+            maskable = maskable & response_mask.bool()
+
+        # 3. 伯努利(t) 掩码:每个可掩位独立以概率 t[i] 被掩
+        rand = torch.rand(B, L, device=device)
+        mask = maskable & (rand < t[:, None])
+        x_t = x_0.clone()
+        x_t[mask] = MASK_ID
+
+        # 4. 双向 transformer(不喂 t —— time-free)
+        h = self.model(x_t, attention_mask=attention_mask)
+        logits = self.lm_head(h)                              # [B, L, V]
+
+        # 5. 1/t 加权的掩码 CE:只在被掩位算
+        ce = F.cross_entropy(logits.view(-1, V), x_0.view(-1), reduction='none').view(B, L)
+        ce = ce * mask
+        n_masked = mask.sum(dim=1).clamp(min=1)               # [B]
+        # 每序列: (1/t) * (sum_ce / n_masked);再 batch mean
+        per_seq = (ce.sum(dim=1) / n_masked) * (1.0 / t)       # [B]
+        loss = per_seq.mean()
+        return DLMOutput(loss=loss, logits=logits)
