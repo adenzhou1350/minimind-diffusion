@@ -2,7 +2,9 @@
 SFT: [prompt;response], 只掩 response(response_mask),1/t loss
 """
 import os
+import sys
 import argparse
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import torch
 from torch.utils.data import DataLoader
 from model.model_dlm import DLMConfig, DLMForMD

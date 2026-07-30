@@ -1,6 +1,9 @@
 """
 Streamlit web demo: 流式展示扩散采样(每步刷新当前揭开的 token)
 """
+import os
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import torch
 import streamlit as st
 from model.model_dlm import DLMConfig, DLMForMD

@@ -2,8 +2,10 @@
 mind-diffusion 推理与对话(对照 minimind eval_llm.py)
 """
 import os
+import sys
 import time
 import argparse
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import torch
 from model.model_dlm import DLMConfig, DLMForMD
 from model.tokenizer_loader import load_tokenizer

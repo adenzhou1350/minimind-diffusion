@@ -2,7 +2,10 @@
 预训练: 全序列随机掩码 + 1/t 加权 loss(在 DLMForMD.forward 里)
 """
 import os
+import sys
 import argparse
+# 让从项目根目录运行时(无论 cwd)能 import model/dataset/trainer
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import torch
 from torch.utils.data import DataLoader
 from model.model_dlm import DLMConfig, DLMForMD
