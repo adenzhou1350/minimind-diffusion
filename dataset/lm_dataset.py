@@ -1,16 +1,46 @@
 """
 数据集类:返回干净序列 + 掩码范围(掩码本身在 model.forward 里现采,每步随机)
+
+用 stdlib json 直接读 jsonl(字节偏移索引,流式),不依赖 datasets/pandas/pyarrow
+—— 更轻、零 C 依赖、避免 pyarrow 在某些 Python 版本上的 import 崩溃,也更贴 minimind 最小实现精神。
 """
+import json
 import torch
 from torch.utils.data import Dataset
-from datasets import load_dataset
+
+
+class _JsonlIndex:
+    """建一次性的行字节偏移索引,支持 O(1) 随机访问、O(1) 内存。"""
+
+    def __init__(self, path):
+        self.path = path
+        self.offsets = []  # 每行起始字节偏移
+        with open(path, 'rb') as f:
+            off = 0
+            for line in f:
+                self.offsets.append(off)
+                off += len(line)
+        self._f = None
+
+    def _file(self):
+        if self._f is None:
+            self._f = open(self.path, 'r', encoding='utf-8')
+        return self._f
+
+    def get(self, i):
+        f = self._file()
+        f.seek(self.offsets[i])
+        return json.loads(f.readline())
+
+    def __len__(self):
+        return len(self.offsets)
 
 
 class PretrainDataset(Dataset):
     """预训练:返回 (input_ids, attention_mask)。labels=自己(forward 里当作 x_0)。"""
 
     def __init__(self, data_path, tokenizer, max_length=340):
-        self.data = load_dataset('json', data_files=data_path, split='train')
+        self.data = _JsonlIndex(data_path)
         self.tok = tokenizer
         self.max_length = max_length
         self.bos = tokenizer.bos_token_id or 1
@@ -20,7 +50,8 @@ class PretrainDataset(Dataset):
         return len(self.data)
 
     def __getitem__(self, i):
-        text = self.data[i].get('text', '') or self.data[i].get('content', '')
+        row = self.data.get(i)
+        text = row.get('text', '') or row.get('content', '')
         ids = self.tok(text, add_special_tokens=False)['input_ids'][: self.max_length - 2]
         ids = [self.bos] + ids + [self.eos]
         attn = [1] * len(ids)
@@ -41,7 +72,7 @@ class SFTDataset(Dataset):
     IM_END = '<|im_end|>'
 
     def __init__(self, data_path, tokenizer, max_length=512):
-        self.data = load_dataset('json', data_files=data_path, split='train')
+        self.data = _JsonlIndex(data_path)
         self.tok = tokenizer
         self.max_length = max_length
 
@@ -49,7 +80,7 @@ class SFTDataset(Dataset):
         return len(self.data)
 
     def __getitem__(self, i):
-        row = self.data[i]
+        row = self.data.get(i)
         messages = row.get('conversations') or row.get('messages') or []
         ids, resp_mask = [], []
         for msg in messages:

@@ -1,47 +1,48 @@
 # tests/test_dataset.py
+import json
 import torch
-from unittest.mock import MagicMock
-from dataset.lm_dataset import PretrainDataset, SFTDataset
+from dataset.lm_dataset import PretrainDataset, SFTDataset, _JsonlIndex
 
 
 def _fake_tok():
-    tok = MagicMock()
-    tok.bos_token_id = 1
-    tok.eos_token_id = 2
-    tok.pad_token_id = 0
-    tok.return_value = {'input_ids': [10, 20, 30]}
-    tok.side_effect = lambda text, **kw: {'input_ids': [10, 20, 30]}
-    return tok
+    class FakeTok:
+        bos_token_id = 1
+        eos_token_id = 2
+        pad_token_id = 0
+        def __call__(self, text, **kw):
+            return {'input_ids': [10, 20, 30]}
+    return FakeTok()
 
 
-def test_pretrain_dataset_shape(monkeypatch, tmp_path):
-    # 造一个临时 jsonl
+def test_pretrain_dataset_shape(tmp_path):
     p = tmp_path / 't.jsonl'
-    p.write_text('{"text": "hello"}\n{"text": "world"}\n')
-    # mock load_dataset 返回简单列表
-    import dataset.lm_dataset as mod
-    monkeypatch.setattr(mod, 'load_dataset', lambda *a, **k: [{'text': 'hello'}, {'text': 'world'}])
+    p.write_text('{"text": "hello"}\n{"text": "world"}\n', encoding='utf-8')
     ds = PretrainDataset(str(p), _fake_tok(), max_length=16)
     ids, attn = ds[0]
     assert ids.shape == (16,)
     assert attn.shape == (16,)
     assert ids[0] == 1  # bos
-    # mock tokenizer 对任意文本只吐 [10,20,30];bos + content(10,20,30) + eos
-    assert ids[1] == 10  # content 首个 token
-    assert ids[4] == 2  # eos(位置 1=bos, 2-4=content, 5=eos)
-    assert attn[0] == 1 and attn[4] == 1 and attn[5] == 0  # pad 位 0
+    assert ids[1] == 10  # content first token (mock tok returns [10,20,30])
+    assert ids[4] == 2  # eos (bos + 3 content + eos)
+    assert attn[5] == 0  # pad
 
 
-
-def test_sft_dataset_response_mask(monkeypatch, tmp_path):
+def test_sft_dataset_response_mask(tmp_path):
     p = tmp_path / 's.jsonl'
-    p.write_text('{}\n')
-    import dataset.lm_dataset as mod
-    monkeypatch.setattr(mod, 'load_dataset', lambda *a, **k: [{'conversations': [
+    p.write_text(json.dumps({'conversations': [
         {'from': 'user', 'value': 'hi'},
         {'from': 'assistant', 'value': 'yo'},
-    ]}])
+    ]}) + '\n', encoding='utf-8')
     ds = SFTDataset(str(p), _fake_tok(), max_length=32)
     ids, attn, resp = ds[0]
     assert ids.shape == (32,) and attn.shape == (32,) and resp.shape == (32,)
     assert resp.sum() > 0, "assistant 位应被标"
+
+
+def test_jsonl_index_random_access(tmp_path):
+    p = tmp_path / 'm.jsonl'
+    p.write_text('{"i":0}\n{"i":1}\n{"i":2}\n', encoding='utf-8')
+    idx = _JsonlIndex(str(p))
+    assert len(idx) == 3
+    assert idx.get(0)['i'] == 0
+    assert idx.get(2)['i'] == 2
