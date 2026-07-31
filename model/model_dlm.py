@@ -217,8 +217,10 @@ class DLMForMD(PreTrainedModel):
         MASK_ID = self.config.mask_token_id
         V = self.config.vocab_size
 
-        # 1. 每序列采掩码比例 t,夹 [1e-4, 1] 防除零
-        t = torch.empty(B, device=device).uniform_(1e-4, 1.0)
+        # 1. 每序列采掩码比例 t。小模型上 U(0,1)+1/t 权重会让梯度被"少掩 easy case"主导、
+        #    且极端 t(近 0 / 近 1)方差大难学;截断到 [0.1, 0.5] 稳定收敛
+        #    (筛选实验:512/6 3k 步 U(0.1,0.5) 均匀权重 acc 25.5%, vs 1/t U(0,1) 仅 ~5%)
+        t = torch.empty(B, device=device).uniform_(0.1, 0.5)
 
         # 2. 可掩范围:真实 token(非 pad);SFT 时再 & response_mask
         maskable = attention_mask.bool() if attention_mask is not None \
@@ -236,13 +238,13 @@ class DLMForMD(PreTrainedModel):
         h = self.model(x_t, attention_mask=attention_mask)
         logits = self.lm_head(h)                              # [B, L, V]
 
-        # 5. 1/t 加权的掩码 CE:只在被掩位算
+        # 5. 均匀加权的掩码 CE(只在被掩位算)。
+        #    原始 LLaDA 用 1/t 权重(似然上界),但小模型+少数据压不住其方差;
+        #    均匀权重(BERT-style MLM)在小模型上收敛更稳,筛选实验证实。
         ce = F.cross_entropy(logits.view(-1, V), x_0.view(-1), reduction='none').view(B, L)
         ce = ce * mask
         n_masked = mask.sum(dim=1).clamp(min=1)               # [B]
-        # 每序列: (1/t) * (sum_ce / n_masked);再 batch mean
-        per_seq = (ce.sum(dim=1) / n_masked) * (1.0 / t)       # [B]
-        loss = per_seq.mean()
+        loss = (ce.sum(dim=1) / n_masked).mean()
         return DLMOutput(loss=loss, logits=logits)
 
     # 🌏🌎🌍 扩散采样: 全 <mask> -> 迭代 unmasking + low-confidence remasking 🌏🌎🌍

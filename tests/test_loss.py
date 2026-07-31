@@ -50,7 +50,7 @@ def test_response_mask_restricts_masking_to_response():
 
 
 def test_no_nan_when_t_near_zero():
-    # t 夹 [1e-4,1],t->0 时 1/t 不应爆
+    # t 截断到 [0.1,0.5],无极端值,loss 始终有限
     m = DLMForMD(_small())
     ids = torch.randint(0, 99, (1, 8))
     attn = torch.ones(1, 8, dtype=torch.long)
