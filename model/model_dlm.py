@@ -250,52 +250,100 @@ class DLMForMD(PreTrainedModel):
     # 🌏🌎🌍 扩散采样: 全 <mask> -> 迭代 unmasking + low-confidence remasking 🌏🌎🌍
     @torch.inference_mode()
     def generate(self, prompt_ids, gen_length=128, steps=64, temperature=0.0,
-                 low_confidence=True):
+                 low_confidence=True, repetition_penalty=1.2,
+                 block_length=0, block_steps=None):
         """
         prompt_ids: [1, P] 干净 prompt
         返回: [1, gen_length] response token(<mask> 全部揭开)
+
+        改进(针对小模型扩散采样的重复循环):
+        - repetition_penalty: 对已在 response 揭开过的 token 降权,打散重复
+          (扩散是双向、无生成历史,易重复高频模式;AR 靠 causal 自然不重复)
+        - block_length: >0 时启用半自回归 block 生成(LLaDA 2 思路)——
+          把 response 分成 gen_length/block_length 块,块内扩散,块间自回归:
+          每块生成时能看到前面已揭开的块(作为干净上下文),后面就不会重复前面。
+          block_steps: 每块的扩散步数(默认 = steps / num_blocks)。
         """
         device = prompt_ids.device
         MASK_ID = self.config.mask_token_id
         P = prompt_ids.shape[1]
-        # 1. 构造 prompt + 全 <mask> 的 response
+        V = self.config.vocab_size
+
+        # ---------- 半自回归 block 生成路径 ----------
+        if block_length and block_length > 0:
+            assert gen_length % block_length == 0, f'gen_length({gen_length}) 必须被 block_length({block_length}) 整除'
+            num_blocks = gen_length // block_length
+            if block_steps is None:
+                assert steps % num_blocks == 0, f'steps({steps}) 必须被 num_blocks({num_blocks}) 整除'
+                block_steps = steps // num_blocks
+            # 已生成的块(干净 token),逐块累加;prompt 始终在前
+            committed = prompt_ids                      # [1, P]
+            for b in range(num_blocks):
+                # 本块:全 <mask> 起步,在 [committed | 本块全mask] 上扩散采样
+                blk = torch.full((1, block_length), MASK_ID, dtype=torch.long, device=device)
+                x = torch.cat([committed, blk], dim=1)  # [1, P + b*L_b + L_b]
+                attn = torch.ones_like(x)
+                is_prompt = torch.zeros_like(x, dtype=torch.bool)
+                is_prompt[:, :x.shape[1] - block_length] = True  # prompt + 前面已生成块 = 永不重掩
+                self._diffuse_block(x, attn, is_prompt, block_length, block_steps,
+                                    temperature, low_confidence, repetition_penalty, P)
+                committed = x                            # 本块已揭开,并入"已生成"
+            return committed[:, P:]                      # response 区
+
+        # ---------- 全序列生成路径(原 LLaDA v1 语义) ----------
         resp = torch.full((1, gen_length), MASK_ID, dtype=torch.long, device=device)
-        x = torch.cat([prompt_ids, resp], dim=1)              # [1, P+L]
+        x = torch.cat([prompt_ids, resp], dim=1)
         attn = torch.ones_like(x)
-        # prompt 位永不重掩
         is_prompt = torch.zeros_like(x, dtype=torch.bool)
         is_prompt[:, :P] = True
+        self._diffuse_block(x, attn, is_prompt, gen_length, steps,
+                            temperature, low_confidence, repetition_penalty, P)
+        return x[:, P:]
 
-        T = steps
+    def _diffuse_block(self, x, attn, is_prompt, block_len, T,
+                       temperature, low_confidence, repetition_penalty, prompt_len):
+        """对 x 里最后 block_len 个 <mask> 位做迭代 unmasking + low-conf remasking。
+        is_prompt 标记永不重掩的位(prompt + 已生成的块);其余在 block 区。
+        repetition_penalty: 对当前 response 区已揭开的 token 降权。
+        """
+        device = x.device
+        MASK_ID = self.config.mask_token_id
+        V = self.config.vocab_size
         for k in range(1, T + 1):
-            s = 1.0 - k / T                                     # 目标"还剩多少比例被掩"
-            # 跑双向 transformer(整条)
+            s = 1.0 - k / T
             h = self.model(x, attention_mask=attn)
-            logits = self.lm_head(h)                            # [1, P+L, V]
-            # 当前被掩的 response 位
-            masked = (x == MASK_ID) & (~is_prompt)             # [1, P+L]
-            idx = masked.nonzero(as_tuple=False)               # [N, 2]
+            logits = self.lm_head(h)                     # [1, S, V]
+            masked = (x == MASK_ID) & (~is_prompt)
+            idx = masked.nonzero(as_tuple=False)         # [N, 2]
             if idx.shape[0] == 0:
-                break  # 全揭开了
-            # 这些位的 logits
-            lm_logits = logits[idx[:, 0], idx[:, 1]]           # [N, V]
+                break
+            lm_logits = logits[idx[:, 0], idx[:, 1]]    # [N, V]
+
+            # 重复惩罚:对当前已揭开的 response token 降权
+            # (用整个 response 区——含前面已生成块——里出现过的 token id)
+            resp_ids = x[0, prompt_len:]                 # [S_resp]
+            seen = resp_ids[resp_ids != MASK_ID].unique()
+            if repetition_penalty != 1.0 and seen.numel() > 0:
+                # seen 里的 logit 除以 penalty(>1 降权;<0 的乘,保持符号)
+                seen_logits = lm_logits[:, seen]
+                seen_logits = torch.where(seen_logits > 0,
+                                          seen_logits / repetition_penalty,
+                                          seen_logits * repetition_penalty)
+                lm_logits = lm_logits.scatter(1, seen.unsqueeze(0).expand(idx.shape[0], -1),
+                                              seen_logits)
+
             temp = max(temperature, 1e-4)
             prob = F.softmax(lm_logits / temp, dim=-1)
-            pred = prob.argmax(dim=-1)                          # [N]
+            pred = prob.argmax(dim=-1)
             if low_confidence:
-                conf = prob.gather(1, pred[:, None]).squeeze(1)  # [N]
+                conf = prob.gather(1, pred[:, None]).squeeze(1)
             else:
                 conf = torch.rand(idx.shape[0], device=device)
-            # 临时写回预测(全揭开当前剩余的 <mask>)
             x[idx[:, 0], idx[:, 1]] = pred
-            # 决定这轮重掩多少个:期望到时间 s 时还剩 floor(gen_length*s) 个被掩
-            n_remain = int(gen_length * s)                      # 应剩多少个 <mask>
-            # 总是重掩 conf 最低的 min(n_remain, 当前已揭开数) 个 -> 下轮重猜
-            # (比 guard 式更贴 LLaDA:不漏掉"该重掩"的步;最后一步 s=0 -> n_remain=0 -> 全固化)
+            n_remain = int(block_len * s)
             n_remask = min(n_remain, idx.shape[0])
             if n_remask > 0:
-                order = torch.argsort(conf)                    # 升序:低 -> 高
-                remask_pos = idx[order[:n_remask]]              # [n_remask, 2]
+                order = torch.argsort(conf)
+                remask_pos = idx[order[:n_remask]]
                 x[remask_pos[:, 0], remask_pos[:, 1]] = MASK_ID
-        # 4. 全部揭开,返回 response 区
-        return x[:, P:]
+

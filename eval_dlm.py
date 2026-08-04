@@ -26,7 +26,9 @@ def main():
     parser.add_argument('--from_weight', type=str, default='sft', help='加载哪个权重(pretrain/sft)')
     parser.add_argument('--steps', type=int, default=64, help='扩散采样步数')
     parser.add_argument('--gen_length', type=int, default=128, help='生成长度')
-    parser.add_argument('--temperature', type=float, default=0.0, help='采样温度')
+    parser.add_argument('--temperature', type=float, default=0.7, help='采样温度(扩散建议 0.6-0.9;0 会塌缩重复)')
+    parser.add_argument('--repetition_penalty', type=float, default=1.3, help='重复惩罚(1.0 关闭;1.2-1.5 打散重复)')
+    parser.add_argument('--block_length', type=int, default=0, help='半自回归块长(0=全序列;>0 启用 block 生成,需整除 gen_length)')
     parser.add_argument('--tokenizer_path', type=str, default='model', help='tokenizer 目录')
     parser.add_argument('--save_dir', type=str, default='out', help='权重目录')
     parser.add_argument('--device', type=str, default='cuda:0' if torch.cuda.is_available() else 'cpu', help='设备')
@@ -44,7 +46,9 @@ def main():
         prompt_ids = tokenizer(prompt_str, return_tensors='pt')['input_ids'].to(args.device)
         t0 = time.time()
         out = model.generate(prompt_ids, gen_length=args.gen_length, steps=args.steps,
-                           temperature=args.temperature)
+                           temperature=args.temperature,
+                           repetition_penalty=args.repetition_penalty,
+                           block_length=args.block_length)
         dt = time.time() - t0
         # 遇首个 eos 截断
         eos = tokenizer.eos_token_id
