@@ -76,7 +76,8 @@ def main():
                 if step % 10 == 0 and is_main_process():
                     logger(f'epoch {epoch} step {step}/{total_steps} loss {loss.item()*args.accumulation_steps:.4f} lr {lr:.2e}')
         if is_main_process():
-            lm_checkpoint(model, os.path.join(args.save_dir, f'pretrain_{args.hidden_size}.pth'))            logger(f'saved pretrain_{args.hidden_size}.pth')
+            lm_checkpoint(model, os.path.join(args.save_dir, f'pretrain_{args.hidden_size}.pth'))
+            logger(f'saved pretrain_{args.hidden_size}.pth')
 
 
 if __name__ == '__main__':
