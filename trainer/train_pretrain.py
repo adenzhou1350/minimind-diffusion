@@ -29,6 +29,7 @@ def main():
     parser.add_argument('--tokenizer_path', type=str, default='model', help='tokenizer 目录')
     parser.add_argument('--save_dir', type=str, default='out', help='输出目录')
     parser.add_argument('--device', type=str, default='cuda:0' if torch.cuda.is_available() else 'cpu', help='设备')
+    parser.add_argument('--from_weight', type=str, default=None, help='加载已有权重续训(如 pretrain,从 out/pretrain_*.pth 续);None=从头训')
     args = parser.parse_args()
 
     setup_seed()
@@ -37,7 +38,7 @@ def main():
 
     # ========== 2. 加载模型与 tokenizer ==========
     cfg = DLMConfig(hidden_size=args.hidden_size, num_hidden_layers=args.num_hidden_layers)
-    model, tokenizer = init_model(cfg, from_weight=None,
+    model, tokenizer = init_model(cfg, from_weight=args.from_weight,
                                  tokenizer_path=args.tokenizer_path,
                                  save_dir=args.save_dir, device=args.device)
     model = model.to(args.device)
@@ -75,8 +76,7 @@ def main():
                 if step % 10 == 0 and is_main_process():
                     logger(f'epoch {epoch} step {step}/{total_steps} loss {loss.item()*args.accumulation_steps:.4f} lr {lr:.2e}')
         if is_main_process():
-            lm_checkpoint(model, os.path.join(args.save_dir, f'pretrain_{args.hidden_size}.pth'))
-            logger(f'saved pretrain_{args.hidden_size}.pth')
+            lm_checkpoint(model, os.path.join(args.save_dir, f'pretrain_{args.hidden_size}.pth'))            logger(f'saved pretrain_{args.hidden_size}.pth')
 
 
 if __name__ == '__main__':
