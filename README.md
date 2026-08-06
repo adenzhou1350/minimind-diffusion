@@ -127,11 +127,11 @@ intermediate_size = ceil(π·768/64)*64, rope_theta=1e6, tied embeddings
 ```
 小档冒烟(8GB / CPU):`hidden_size=512, num_hidden_layers=6`。
 
-采样默认:`steps=64, gen_length=128, temperature=0.0, low_confidence=True`。
-- 论文最优是 `steps ≈ gen_length`(慢);教学版固定小 T 够演示。
-- `temperature=0` 贪心(论文 eval 用);>0 加 Gumbel 噪声增多样性。
-- **只保留 temperature 采样**(去掉了 AR 的 top-k/top-p/repetition penalty):
-  扩散每步是 argmax 选 token,nucleus 截断意义不大;非 AR 里"重复"语义不清。
+采样默认:`steps=128, gen_length=128, temperature=0.7, repetition_penalty=1.3, low_confidence=True`。
+- 论文最优是 `steps ≈ gen_length`(慢);教学版 128 够演示。
+- `temperature=0` 会塌缩成重复高频 token(扩散特性,与 AR 相反);建议 **0.6–0.9**,>0.9 开始乱说。
+- `repetition_penalty` 1.2–1.5 打散重复(扩散双向无生成历史,易循环);1.0 关闭会死循环,2.0 太狠逼出乱码。
+- `block_length` >0 启用半自回归块生成(LLaDA 2 思路),需整除 gen_length;更防重复但更短促。
 
 ---
 
@@ -143,12 +143,12 @@ intermediate_size = ceil(π·768/64)*64, rope_theta=1e6, tied embeddings
 | 注意力 | causal | 双向 |
 | KV cache | 有 | 无 |
 | 时间步 t | 无 | 有,不喂模型 |
-| loss | next-token CE | 1/t 加权掩码 CE |
+| loss | next-token CE | 均匀加权掩码 CE(原 1/t 在小模型失效,见 §6.1) |
 | dataset 返回 | (input_ids, labels) | (input_ids, attention_mask[, response_mask]) |
 | 掩码在哪 | 无 | forward 里现采(每步随机) |
-| generate | AR + KV cache | 扩散采样 + remasking |
+| generate | AR + KV cache | 扩散采样 + low-conf remasking |
 | 词表 | 6400 | 6401 |
-| 采样开关 | temp/topk/topp/rep | 仅 temperature |
+| 采样开关 | temp/topk/topp/rep | temperature + repetition_penalty + block |
 | 训练阶段 | pretrain/sft/lora/dpo/ppo/grpo/agent/distill | **pretrain/sft**(本 repo) |
 
 > **掩码在 forward 里现采**:minimind 的 dataset 返回 `labels`(目标 token);
@@ -158,11 +158,35 @@ intermediate_size = ceil(π·768/64)*64, rope_theta=1e6, tied embeddings
 ---
 
 ## 6. 已知问题 / 诚实记录
-1. **小模型质量**:模型太小 + 语料 mini,生成质量不保证,追求"原理讲清 + 全链路通"。
-2. **采样步数折中**:固定 T=64(论文最优 T=L 慢);README 注明 tradeoff。
-3. **采样简化**:只留 temperature(理由见 §4)。
-4. **`<mask>` 初始化**:跟 LLaDA 官方代码一致,标准可学习 init,不做 mean-averaging(博客传的 folk)。
-5. **本 repo 不含**:DPO/LoRA/RL/蒸馏(LLaDA 2 block diffusion 也未实现)——见后续 spec。
+
+### 6.1 loss 配方:从 LLaDA 的 1/t 改成均匀权重(关键发现)
+原版 LLaDA 用 `1/t` 加权掩码 CE(数学上是似然上界,严谨),`t~U(0,1)`。但**在小模型 + 少数据上不工作**:held-out 掩码重建准确率只有 **0–5%**。
+
+诊断:1/t 权重让梯度被"少掩 easy case"主导(小 t 时 1/t 爆炸),模型只学了 token 边缘分布,没学"根据上下文还原"。用 4 个对照组筛选后,**均匀权重 + `t~U(0.1,0.5)`** 把准确率拉到 **41.5%**(64M),收敛曲线也健康(loss 7.4→1.7)。
+
+代价:不再是严格的扩散似然上界(NELBO),更像 BERT-style MLM + 扩散采样。**去噪匹配目标仍在做,采样数学没动**,只是权衡的权重不最优了。LLaDA 2 自己也截断 mask 比例到 `[α_min,α_max]`,本改动踩在同一路径上。诚实标:偏离原版,换小模型可学性。
+
+### 6.2 采样:repetition penalty + block(防重复循环)
+小扩散 LM 会无限重复高频模式("天空是蓝色的,天空是蓝色的...")——双向采样无生成历史(每个位置独立预测),不像 AR 有 causal 约束。
+- `repetition_penalty`(默认 1.3):对已揭开的 response token 降权。1.0 死循环,1.2-1.5 甜区,2.0 逼出乱码。
+- `block_length`(默认 0):>0 启用半自回归块生成(LLaDA 2 思路),块间自回归、块内扩散,后面块能看到前面已生成的干净块。
+
+效果:从"死循环重复"→"通顺连贯多句中文"。
+
+### 6.3 规模墙:能说不能对话(目标1 现状)
+64M + mini 语料(90万条)训到 2 epoch,base 模型:
+- ✅ 能产出**通顺连贯的中文**(语言建模学会了)
+- ✅ **部分问题能真回答**("你叫什么名字"→自我介绍;"如何学习编程"→给 Python/Codecademy 建议)
+- ❌ **不稳**:仍会滑回续写模式("1+1等于几"开始列 "-2的平方是..." 数学题)
+- ❌ **知识幻觉**("1+1=0.2133"、"水星反射太阳")
+- ❌ **多轮不看上文**
+
+诊断:**训练/推理分布 gap**(训练只掩部分,推理全掩开头,小模型跨不过)+ **规模不够**(LLaDA 原版 8B+2.3T 压住,64M 压不住)。多 epoch 边际递减(1→2 epoch,acc 41→44,+3 个点),撞到规模墙。要质变到"稳定对话",需更大模型 / 更多数据——超出 minimind 同档范围。
+
+### 6.4 其他
+- **`<mask>` 初始化**:标准可学习 init(跟 LLaDA 官方一致;mean/zero init 筛选后无改善,见 screen_init.py)
+- **本 repo 不含**:DPO/LoRA/RL/蒸馏(LLaDA 2 block diffusion 部分实现)— 见后续
+- **数据加载**:用 stdlib json + 字节偏移索引,不依赖 datasets/pandas/pyarrow(pyarrow 在 Python 3.14 本环境 import 崩溃)
 
 ---
 
@@ -180,7 +204,8 @@ trainer/
   train_sft.py         # [prompt;response] 只掩 response
 scripts/
   web_demo.py          # Streamlit 流式扩散采样
-eval_dlm.py            # 中文 prompt + tokens/s
+eval_dlm.py            # 中文 prompt + tokens/s(对照 minimind eval_llm.py)
+chat_dlm.py            # 交互式多轮对话
 tests/                 # pytest: model / loss / sampling / dataset / trainer_utils
 ```
 
