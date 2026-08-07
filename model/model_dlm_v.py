@@ -147,3 +147,62 @@ class DLMForVLM(DLMForMD):
         n_masked = mask.sum(dim=1).clamp(min=1)
         loss = (ce.sum(dim=1) / n_masked).mean()
         return DLMOutput(loss=loss, logits=logits)
+
+    # 🌏🌎🌍 扩散采样:带 vision 的生成(继承父类采样循环,vision 位永不重掩) 🌏🌎🌍
+    @torch.inference_mode()
+    def generate(self, prompt_ids, gen_length=128, steps=64, temperature=0.0,
+                 low_confidence=True, repetition_penalty=1.2, block_length=0,
+                 pixel_values=None):
+        """继承父类采样,vision 占位符位永不重掩。pixel_values 给图。"""
+        device = prompt_ids.device
+        MASK_ID = self.config.mask_token_id
+        P = prompt_ids.shape[1]
+        IMG_PAD = self.config.image_pad_token_id
+
+        # vision 特征预计算一次(采样循环里反复用)
+        vis = self._compute_vision(pixel_values, device)
+
+        resp = torch.full((1, gen_length), MASK_ID, dtype=torch.long, device=device)
+        x = torch.cat([prompt_ids, resp], dim=1)
+        attn = torch.ones_like(x)
+        is_prompt = torch.zeros_like(x, dtype=torch.bool)
+        is_prompt[:, :P] = True
+        # vision 占位符位也永不重掩
+        is_prompt |= (x == IMG_PAD)
+
+        T = steps
+        for k in range(1, T + 1):
+            s = 1.0 - k / T
+            # embed + 填 vision
+            h = self._embed_with_vision(x, vis)
+            h = self._run_transformer(h, attn, x.shape[1])
+            logits = self.lm_head(h)
+
+            masked = (x == MASK_ID) & (~is_prompt)
+            idx = masked.nonzero(as_tuple=False)
+            if idx.shape[0] == 0:
+                break
+            lm_logits = logits[idx[:, 0], idx[:, 1]]
+            # 重复惩罚
+            resp_ids = x[0, P:]
+            seen = resp_ids[resp_ids != MASK_ID].unique()
+            if repetition_penalty != 1.0 and seen.numel() > 0:
+                seen_logits = lm_logits[:, seen]
+                seen_logits = torch.where(seen_logits > 0,
+                                          seen_logits / repetition_penalty,
+                                          seen_logits * repetition_penalty)
+                lm_logits = lm_logits.scatter(1, seen.unsqueeze(0).expand(idx.shape[0], -1),
+                                               seen_logits)
+            temp = max(temperature, 1e-4)
+            prob = F.softmax(lm_logits / temp, dim=-1)
+            pred = prob.argmax(dim=-1)
+            conf = prob.gather(1, pred[:, None]).squeeze(1) if low_confidence \
+                else torch.rand(idx.shape[0], device=device)
+            x[idx[:, 0], idx[:, 1]] = pred
+            n_remain = int(gen_length * s)
+            n_remask = min(n_remain, idx.shape[0])
+            if n_remask > 0:
+                order = torch.argsort(conf)
+                remask_pos = idx[order[:n_remask]]
+                x[remask_pos[:, 0], remask_pos[:, 1]] = MASK_ID
+        return x[:, P:]

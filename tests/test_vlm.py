@@ -76,3 +76,26 @@ def test_image_pad_positions_never_masked():
     # 换图后 loss 应变(vision 通过双向注意力影响文本 hidden state)——证明 vision 真接进去了
     assert not torch.allclose(out1.loss, out2.loss, atol=1e-5), "vision embedding 应影响 loss(双向注意力)"
 
+
+def test_generate_with_image_runs():
+    """带图的 generate 跑完,response 全揭开(无 <mask> 残留)。"""
+    torch.manual_seed(0)
+    cfg = _small_vlm()
+    m = DLMForVLM(cfg)
+    m.vision_encoder = MagicMock()
+    m.vision_encoder.return_value = MagicMock(last_hidden_state=torch.randn(1, 8, 64))
+    # 训几步让 argmax 不塌缩到 <mask>(同 mind-diffusion test_sampling 经验)
+    opt = torch.optim.AdamW([p for p in m.parameters() if p.requires_grad], lr=3e-3)
+    m.train()
+    ids = torch.randint(0, 99, (2, 16))
+    attn = torch.ones(2, 16, dtype=torch.long)
+    for _ in range(50):
+        out = m(input_ids=ids, attention_mask=attn, labels=ids)  # 无图
+        out.loss.backward(); opt.step(); opt.zero_grad(set_to_none=True)
+    m.eval()
+    prompt = torch.tensor([[1, 98, 98, 98, 98, 98, 98, 98, 98, 5, 6, 7]])  # 含 8 个 image_pad
+    pixel = torch.randn(1, 3, 256, 256)
+    out = m.generate(prompt, gen_length=8, steps=4, pixel_values=pixel)
+    assert out.shape == (1, 8)
+    assert (out != 99).all(), "response 应全揭开(无 <mask> 残留)"
+
