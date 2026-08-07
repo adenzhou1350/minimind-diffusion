@@ -28,3 +28,122 @@ class DLMVLMConfig(DLMConfig):
         self.projector_hidden = projector_hidden
         self.vision_encoder_name = vision_encoder_name
         super().__init__(image_pad_token_id=image_pad_token_id, **kwargs)
+
+
+# 🌏🌎🌍 vision path: projector + encoder + DLMForVLM 🌏🌎🌍
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from model.model_dlm import DLMForMD, DLMOutput
+
+
+class MMVisionProjector(nn.Module):
+    """LLaVA-1.5 式 MLP:LayerNorm -> Linear -> GELU -> Linear。"""
+
+    def __init__(self, in_dim, out_dim, mid=None):
+        super().__init__()
+        mid = mid or out_dim
+        self.norm = nn.LayerNorm(in_dim)
+        self.fc1 = nn.Linear(in_dim, mid)
+        self.fc2 = nn.Linear(mid, out_dim)
+
+    def forward(self, x):
+        return self.fc2(F.gelu(self.fc1(self.norm(x))))
+
+
+class DLMForVLM(DLMForMD):
+    """包装 DLMForMD,加 vision 路径。vision token 填占位符,永不掩。"""
+
+    def __init__(self, cfg):
+        super().__init__(cfg)
+        self.projector = MMVisionProjector(cfg.image_hidden_size, cfg.hidden_size,
+                                          cfg.projector_hidden)
+        # vision encoder 惰性加载(测试可 mock);真实加载见 _load_vision_encoder
+        self.vision_encoder = None
+
+    def _load_vision_encoder(self, name=None):
+        """加载冻结的 vision encoder(SigLIP2 或 CLIP fallback)。"""
+        from transformers import SiglipVisionModel
+        name = name or self.config.vision_encoder_name
+        try:
+            enc = SiglipVisionModel.from_pretrained(name)
+        except Exception as e:
+            # fallback: CLIP-B/32(768-dim,生态最稳)
+            from transformers import CLIPVisionModel
+            print(f'SigLIP 加载失败({e}),回退 CLIP-B/32')
+            enc = CLIPVisionModel.from_pretrained('openai/clip-vit-base-patch32')
+        if self.config.freeze_vision:
+            for p in enc.parameters():
+                p.requires_grad = False
+            enc.eval()
+        return enc
+
+    def _compute_vision(self, pixel_values, device):
+        """vision encoder + projector,返回 [B, T_img, hidden] 或 None。"""
+        if pixel_values is None:
+            return None
+        if self.vision_encoder is None:
+            self.vision_encoder = self._load_vision_encoder().to(device)
+        with torch.no_grad():
+            vis = self.vision_encoder(pixel_values).last_hidden_state  # [B, T_img, img_dim]
+        return self.projector(vis)  # [B, T_img, hidden]
+
+    def _embed_with_vision(self, input_ids, vis):
+        """embed input_ids,把 vision 占位符位替换成 vis。"""
+        h = self.model.embed(input_ids)  # [B, L, H]
+        if vis is not None:
+            img_mask = (input_ids == self.config.image_pad_token_id)  # [B, L]
+            vis_flat = vis.reshape(-1, vis.shape[-1])  # [B*T_img, hidden]
+            h = h.clone()  # 避免原地改影响 autograd
+            h[img_mask] = vis_flat
+        return h
+
+    def _run_transformer(self, h, attention_mask, L):
+        am = None
+        if attention_mask is not None:
+            am = attention_mask[:, None, None, :].to(h.dtype)
+            am = (1.0 - am) * torch.finfo(h.dtype).min
+        freqs = self.model.freqs_cis[:L]
+        for layer in self.model.layers:
+            h = layer(h, am, freqs)
+        return self.model.norm(h)
+
+    def forward(self, input_ids, attention_mask=None, response_mask=None, labels=None,
+                pixel_values=None):
+        x_0 = labels if labels is not None else input_ids
+        B, L = x_0.shape
+        device = x_0.device
+        MASK_ID = self.config.mask_token_id
+        V = self.config.vocab_size
+        IMG_PAD = self.config.image_pad_token_id
+
+        # 1. vision 特征(若有图)
+        vis = self._compute_vision(pixel_values, device)
+
+        # 2. 采掩码比例 t + maskable(排除 vision 占位符位)
+        t = torch.empty(B, device=device).uniform_(0.1, 0.5)
+        maskable = attention_mask.bool() if attention_mask is not None \
+            else torch.ones(B, L, dtype=torch.bool, device=device)
+        if pixel_values is not None:
+            maskable = maskable & (input_ids != IMG_PAD)  # vision 位永不掩
+        if response_mask is not None:
+            maskable = maskable & response_mask.bool()
+
+        rand = torch.rand(B, L, device=device)
+        mask = maskable & (rand < t[:, None])
+        x_t = x_0.clone()
+        x_t[mask] = MASK_ID
+
+        # 3. embed + 填 vision
+        h = self._embed_with_vision(x_t, vis)
+
+        # 4. transformer + lm_head
+        h = self._run_transformer(h, attention_mask, L)
+        logits = self.lm_head(h)
+
+        # 5. 均匀权重掩码 CE
+        ce = F.cross_entropy(logits.view(-1, V), x_0.view(-1), reduction='none').view(B, L)
+        ce = ce * mask
+        n_masked = mask.sum(dim=1).clamp(min=1)
+        loss = (ce.sum(dim=1) / n_masked).mean()
+        return DLMOutput(loss=loss, logits=logits)
