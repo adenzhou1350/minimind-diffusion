@@ -25,7 +25,7 @@ class DLMConfig(PretrainedConfig):
                  num_hidden_layers=8,
                  num_attention_heads=8,
                  num_key_value_heads=4,
-                 vocab_size=6401,
+                 vocab_size=6402,
                  intermediate_size=None,
                  max_position_embeddings=32768,
                  rms_norm_eps=1e-6,
@@ -33,6 +33,7 @@ class DLMConfig(PretrainedConfig):
                  tie_word_embeddings=True,
                  dropout=0.0,
                  mask_token_id=6400,
+                 image_pad_token_id=6401,
                  bos_token_id=1,
                  eos_token_id=2,
                  use_moe=False,
@@ -50,6 +51,7 @@ class DLMConfig(PretrainedConfig):
         self.tie_word_embeddings = tie_word_embeddings
         self.dropout = dropout
         self.mask_token_id = mask_token_id
+        self.image_pad_token_id = image_pad_token_id  # VLM 视觉占位符(mind-diffusion-v 用)
         self.bos_token_id = bos_token_id
         self.eos_token_id = eos_token_id
         self.use_moe = use_moe  # 保留字段但不启用(跟 minimind 一致)
