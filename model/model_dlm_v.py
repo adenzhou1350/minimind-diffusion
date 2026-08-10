@@ -16,10 +16,10 @@ class DLMVLMConfig(DLMConfig):
     def __init__(self,
                  image_hidden_size=768,
                  image_token_len=64,
-                 image_pad_token_id=6401,
+                 image_pad_token_id=12,
                  freeze_vision=True,
                  projector_hidden=768,
-                 vision_encoder_name='jingyaogong/siglip2-base-p32-256-ve',
+                 vision_encoder_name='model/siglip2-base-p32-256-ve',  # 本地路径(已下载)
                  **kwargs):
         self.image_hidden_size = image_hidden_size
         self.image_token_len = image_token_len
@@ -79,23 +79,47 @@ class DLMForVLM(DLMForMD):
         return enc
 
     def _compute_vision(self, pixel_values, device):
-        """vision encoder + projector,返回 [B, T_img, hidden] 或 None。"""
+        """vision encoder + projector,返回 [B, T_img, hidden] 或 None。
+        vision encoder 是 fp16,pixel 转 fp16 喂进去;projector 输出转回 fp32
+        (后续 _embed_with_vision 再对齐到 h 的 dtype)。"""
         if pixel_values is None:
             return None
         if self.vision_encoder is None:
             self.vision_encoder = self._load_vision_encoder().to(device)
         with torch.no_grad():
-            vis = self.vision_encoder(pixel_values).last_hidden_state  # [B, T_img, img_dim]
-        return self.projector(vis)  # [B, T_img, hidden]
+            # vision encoder 权重 fp16,输入也要 fp16。mock 时无 parameters,直接用原 dtype
+            try:
+                ve_params = list(self.vision_encoder.parameters())
+                ve_dtype = ve_params[0].dtype if ve_params else pixel_values.dtype
+            except Exception:
+                ve_dtype = pixel_values.dtype
+            pix = pixel_values.to(ve_dtype) if ve_dtype != pixel_values.dtype else pixel_values
+            vis = self.vision_encoder(pix)
+            vis = vis.last_hidden_state if hasattr(vis, 'last_hidden_state') else vis
+        # projector 输出 fp32(mock 也兼容)
+        vis = vis.float() if vis.dtype != torch.float32 else vis
+        return self.projector(vis)
 
     def _embed_with_vision(self, input_ids, vis):
-        """embed input_ids,把 vision 占位符位替换成 vis。"""
+        """embed input_ids,把 vision 占位符位替换成 vis。
+        防御性对齐:按 vis 的实际 token 数填(数据里某些样本的占位符数 ≠ image_token_len,
+        导致 img_mask 数 > vis token 数时 shape mismatch)。"""
         h = self.model.embed(input_ids)  # [B, L, H]
         if vis is not None:
             img_mask = (input_ids == self.config.image_pad_token_id)  # [B, L]
-            vis_flat = vis.reshape(-1, vis.shape[-1])  # [B*T_img, hidden]
-            h = h.clone()  # 避免原地改影响 autograd
-            h[img_mask] = vis_flat
+            vis_flat = vis.reshape(-1, vis.shape[-1]).to(h.dtype)  # [B*T_img, H]
+            h = h.clone()
+            n_vis = vis_flat.shape[0]
+            img_pos = img_mask.nonzero(as_tuple=False)  # [N_mask, 2]
+            n_mask = img_pos.shape[0]
+            if n_mask == n_vis:
+                h[img_mask] = vis_flat
+            elif n_mask > n_vis:
+                # 占位符多于 vis token:只填前 n_vis 个(截断多余占位符,保留其原 embedding)
+                h[img_pos[:n_vis, 0], img_pos[:n_vis, 1]] = vis_flat
+            else:
+                # 占位符少于 vis token:只用前 n_mask 个 vis token
+                h[img_mask] = vis_flat[:n_mask]
         return h
 
     def _run_transformer(self, h, attention_mask, L):
