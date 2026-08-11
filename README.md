@@ -115,6 +115,40 @@ streamlit run scripts/web_demo.py
 ```
 每步刷新当前揭开的 token,直观看到"草稿→精修"。
 
+### 3.7 mind-diffusion-v(多模态:图+文扩散)
+文本 DLM 之上加一条 vision 路径,对照 [minimind-v](https://github.com/jingyaogong/minimind-v):
+冻结 SigLIP2(95M,256px,8×8=64 token,768-dim)+ MLP projector,
+vision token 填到 `<|image_pad|>` 占位符(观测条件,**永不掩**),扩散 loss 只掩文本。
+LLaVA 式前缀注入(非 cross-attn)。`vocab_size=6401` 不变(image_pad 复用 minimind 预留 id 12,不新增 token)。
+
+放数据 + 视觉编码器(自行下载,已 gitignore):
+- `dataset/pretrain_i2t.parquet`(~4.1GB,图-文对,127 万行)+ `dataset/sft_i2t.parquet`(~4.6GB,多轮指令带图,290 万行)
+- `model/siglip2-base-p32-256-ve/`(从 [jingyaogong/siglip2-base-p32-256-ve](https://huggingface.co/jingyaogong/siglip2-base-p32-256-ve) 下载)
+
+### 3.8 VLM 两阶段训练
+```bash
+# Stage 1 对齐:LLM 全冻结,只训 projector(lr 4e-4, freeze_mode=2)
+python trainer/train_pretrain_vlm.py
+# Stage 2 SFT:LLM 首尾层 + final norm + lm_head + projector(lr 5e-6, freeze_mode=1)
+python trainer/train_sft_vlm.py
+# 小档(8GB 显卡):--max_seq_len 256 --batch_size 16 --accumulation_steps 8
+```
+Stage1 产出 `out/vlm_align_768.pth`,Stage2 产出 `out/vlm_sft_768.pth`。
+Stage2 每 1000 步中途存盘(单 epoch ~47h,崩了不丢);`--skip N --from_weight vlm_sft` 可从第 N 个 accum step 续训。
+
+### 3.9 VLM 推理
+```bash
+python eval_dlm_vlm.py --from_weight vlm_sft
+```
+从 `dataset/sft_i2t.parquet` 取一张样本图,跑 3 个中文 prompt(描述/有什么/主色调),
+打印生成 + tokens/s,参考 prompt/answer 也从 parquet 取出对照。样本图存 `out/eval_sample.jpg`。
+
+### 3.10 VLM Web demo
+```bash
+streamlit run scripts/web_demo_vlm.py
+```
+上传图 + 文本 prompt,流式看扩散揭开(未揭开的 `<mask>` 显示为 ▍)。带 gen_length/steps/温度/重复惩罚滑块。
+
 ---
 
 ## 4. 配置
@@ -186,7 +220,13 @@ intermediate_size = ceil(π·768/64)*64, rope_theta=1e6, tied embeddings
 ### 6.4 其他
 - **`<mask>` 初始化**:标准可学习 init(跟 LLaDA 官方一致;mean/zero init 筛选后无改善,见 screen_init.py)
 - **本 repo 不含**:DPO/LoRA/RL/蒸馏(LLaDA 2 block diffusion 部分实现)— 见后续
-- **数据加载**:用 stdlib json + 字节偏移索引,不依赖 datasets/pandas/pyarrow(pyarrow 在 Python 3.14 本环境 import 崩溃)
+- **数据加载**:文本侧用 stdlib json + 字节偏移索引,不依赖 datasets/pandas/pyarrow(pyarrow 在 Python 3.14 本环境 import 崩溃)
+- **VLM 数据加载**:parquet 用 pyarrow **按行组流式读**(`read_row_group` 逐组灌进 Python list),不一次性 `read` 全列——后者会向 Arrow 索要一块 20GB+ 连续 buffer,realloc 失败(`ArrowMemoryError`),此前是 SFT 卡死根因
+
+### 6.5 VLM:最小多模态扩散(目标2 现状)
+把 minimind-v 的"LLM 继承 + <50 行 vision 路径"思路搬到扩散侧:vision token 作为**观测条件**注入(填占位符、永不掩),扩散 loss 仍在文本侧做。两阶段(对齐只训 projector → SFT 解冻首尾层)。
+
+现状(Stage2 SFT 训练中):loss 从对齐末的 ~2.6 续训,在 2.0–2.5 区间 noisy 收敛。待 `vlm_sft_768.pth` 出来跑 `eval_dlm_vlm.py` 验真实图描述质量。诚实预期:跟文本侧 §6.3 同款规模墙——64M 压不住多模态对齐,能出跟图相关的词、难稳定准确描述;重点在跑通"扩散 + 视觉条件"的最小 pipeline,不是追 SOTA VLM。
 
 ---
 
@@ -194,25 +234,32 @@ intermediate_size = ceil(π·768/64)*64, rope_theta=1e6, tied embeddings
 ```
 model/
   model_dlm.py        # DLMConfig + 双向 transformer + DLMForMD(掩码+loss+generate)
-  tokenizer_loader.py  # 复用 minimind BPE + <mask>
+  model_dlm_v.py      # DLMVLMConfig + MMVisionProjector + DLMForVLM(继承 DLMForMD 加 vision 路径)
+  tokenizer_loader.py  # 复用 minimind BPE + <mask>(<|image_pad|> 用预留 id 12)
 dataset/
   lm_dataset.py        # PretrainDataset + SFTDataset
+  vlm_dataset.py       # PretrainVLMDataset + SFTVLMDataset(parquet+PIL,行组流式读)
   dataset.md           # 数据放置说明
 trainer/
-  trainer_utils.py     # get_lr / SkipBatchSampler / init_model / Logger
+  trainer_utils.py     # get_lr / SkipBatchSampler / init_model / init_vlm_model / freeze_vlm / vlm_checkpoint
   train_pretrain.py    # 全序列随机掩码 + 1/t loss
   train_sft.py         # [prompt;response] 只掩 response
+  train_pretrain_vlm.py # Stage1 对齐:LLM 全冻结,只训 projector
+  train_sft_vlm.py     # Stage2 SFT:LLM 首尾层 + projector,每 1000 步中途存盘
 scripts/
-  web_demo.py          # Streamlit 流式扩散采样
+  web_demo.py          # Streamlit 流式扩散采样(文本)
+  web_demo_vlm.py      # Streamlit 流式扩散采样(图+文)
 eval_dlm.py            # 中文 prompt + tokens/s(对照 minimind eval_llm.py)
+eval_dlm_vlm.py        # 图+中文 prompt 扩散采样(对照 minimind-v eval)
 chat_dlm.py            # 交互式多轮对话
-tests/                 # pytest: model / loss / sampling / dataset / trainer_utils
+tests/                 # pytest: model / loss / sampling / dataset / vlm / trainer_utils
 ```
 
 ---
 
 ## 8. 致谢
 - [minimind](https://github.com/jingyaogong/minimind) — 极简风格与"从 0 训练"哲学的本源。
+- [minimind-v](https://github.com/jingyaogong/minimind-v) — 多模态扩展的"LLM 继承 + 极简 vision 路径"范式。
 - [LLaDA](https://github.com/ML-GSAI/LLaDA)(Nie et al., 2025, arXiv:2502.09992)— 掩码扩散语言模型的方法与官方实现。
 
 ## License
