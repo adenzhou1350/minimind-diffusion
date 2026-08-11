@@ -9,6 +9,8 @@ import io
 import time
 import argparse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Windows 控制台默认 GBK,生成中文含 U+FFFD 会 UnicodeEncodeError;统一 UTF-8 输出
+sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 import torch
 import pyarrow.parquet as pq
 from PIL import Image
