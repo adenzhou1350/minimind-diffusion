@@ -11,16 +11,46 @@ from PIL import Image
 
 
 class _ParquetIndex:
-    """pyarrow 直读 parquet,一次性读入内存(数据已压缩,可接受)。"""
+    """pyarrow 直读 parquet,按行组(row group)流式灌进 Python list,
+    避免一次性 read 全列(Arrow 会要一块 20GB+ 连续 buffer,realloc 失败)。
+    行组逐个读(每个 ~5000 行、几 MB),to_pylist 后丢 Arrow table,
+    最终 _convs/_imgs 是纯 Python list,随机访问 O(1) 且不再碰 Arrow。
+    __len__ 用 metadata(不触发数据读)。"""
 
     def __init__(self, path):
-        self._table = pq.ParquetFile(path).read()
+        self._pf = pq.ParquetFile(path)
+        self._nrows = self._pf.metadata.num_rows
+        self._nrg = self._pf.metadata.num_row_groups
+        self._path = path
+        self._convs = None
+        self._imgs = None
+
+    def _ensure_loaded(self):
+        if self._convs is not None:
+            return
+        self._convs, self._imgs = [], []
+        for rg in range(self._nrg):
+            tbl = self._pf.read_row_group(rg, columns=['conversations', 'image_bytes'])
+            self._convs.extend(tbl.column('conversations').to_pylist())
+            self._imgs.extend(tbl.column('image_bytes').to_pylist())
+        self._pf = None  # 读完关掉句柄,数据已全在 _convs/_imgs
+
+    def __getstate__(self):
+        # pickle 到 DataLoader worker:只送路径,数据按需在 worker 里重流式加载
+        return {'_path': self._path, '_nrows': self._nrows, '_nrg': self._nrg}
+
+    def __setstate__(self, st):
+        self.__dict__.update(st)
+        self._pf = None
+        self._convs = None
+        self._imgs = None
 
     def __len__(self):
-        return self._table.num_rows
+        return self._nrows
 
     def get(self, i):
-        return {c: self._table.column(c)[i].as_py() for c in self._table.column_names}
+        self._ensure_loaded()
+        return {'conversations': self._convs[i], 'image_bytes': self._imgs[i]}
 
 
 def _decode_image(image_bytes, size=256):
@@ -48,6 +78,9 @@ class _VLMBase(Dataset):
         self.eos = tokenizer.eos_token_id or 2
         self.pad = tokenizer.pad_token_id or 0
         self._pad_id = None  # 惰性缓存 image_pad 的 token id
+
+    def __len__(self):
+        return len(self.data)
 
     @property
     def pad_id(self):

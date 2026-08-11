@@ -8,7 +8,7 @@ def test_config_defaults_align_minimind():
     assert c.num_hidden_layers == 8
     assert c.num_attention_heads == 8
     assert c.num_key_value_heads == 4          # GQA 2:1
-    assert c.vocab_size == 6402                  # 6400 + <mask> + <image_pad>
+    assert c.vocab_size == 6401                  # 6400 + <mask>(image_pad 用 minimind 预留 id 12)
     assert c.intermediate_size == math.ceil(768 * math.pi / 64) * 64
     assert c.tie_word_embeddings is True
     assert c.mask_token_id == 6400

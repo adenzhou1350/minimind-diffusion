@@ -89,3 +89,62 @@ def init_distributed_mode():
         dist.init_process_group('nccl', rank=rank, world_size=world)
         torch.cuda.set_device(rank)
     return dist.is_initialized()
+
+
+# 🌏🌎🌍 VLM 工具:冻结策略 + init_vlm_model + vlm_checkpoint(剥离 vision encoder) 🌏🌎🌍
+def freeze_vlm(model, mode=2):
+    """冻结策略:minimind-v 风格。vision encoder 始终冻结。
+    mode=2: LLM 全冻结,只 projector 训(Stage 1 对齐)
+    mode=1: LLM 首尾层(第0层+最后层)+ final norm + lm_head + projector 训(Stage 2 SFT)
+    mode=0: 全解冻
+    """
+    if getattr(model, 'vision_encoder', None) is not None:
+        for p in model.vision_encoder.parameters():
+            p.requires_grad = False
+    if mode == 2:
+        for p in model.model.parameters():
+            p.requires_grad = False
+        for p in model.lm_head.parameters():
+            p.requires_grad = False
+        # projector 保持可训
+    elif mode == 1:
+        n = len(model.model.layers)
+        for i, layer in enumerate(model.model.layers):
+            for p in layer.parameters():
+                p.requires_grad = (i == 0 or i == n - 1)
+        for p in model.model.embed.parameters():
+            p.requires_grad = False
+        for p in model.model.norm.parameters():
+            p.requires_grad = True
+        for p in model.lm_head.parameters():
+            p.requires_grad = True
+    # mode 0: 不动
+
+
+def init_vlm_model(cfg, from_weight='pretrain', tokenizer_path='model', save_dir='out',
+                   device='cuda', freeze_mode=2):
+    """加载 tokenizer + 构建 DLMForVLM + 加载 LLM 权重 + 冻结策略。
+    vision encoder 惰性加载(forward 首次调用时触发)。"""
+    from model.model_dlm_v import DLMForVLM  # 函数内 import 避免循环
+    tokenizer = load_tokenizer(tokenizer_path)
+    model = DLMForVLM(cfg).to(device)
+    # 加载 LLM 权重(LLM 部分的 key 不带 vision_encoder./projector. 前缀)
+    weight_path = os.path.join(save_dir, f'{from_weight}_{cfg.hidden_size}.pth')
+    if from_weight is not None and os.path.exists(weight_path):
+        state = torch.load(weight_path, map_location=device)
+        own = model.state_dict()
+        loaded = {k: v for k, v in state.items() if k in own and own[k].shape == v.shape}
+        model.load_state_dict(loaded, strict=False)
+        print(f'loaded {len(loaded)}/{len(state)} keys from {weight_path}')
+    freeze_vlm(model, freeze_mode)
+    n = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f'trainable params: {n / 1e6:.2f}M (freeze_mode={freeze_mode})')
+    return model, tokenizer
+
+
+def vlm_checkpoint(model, path):
+    """strip vision encoder 权重,只存 LLM + projector(跟 minimind-v 一致)。"""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    state = {k: v.half().cpu() for k, v in model.state_dict().items()
+             if not k.startswith('vision_encoder.')}
+    torch.save(state, path)

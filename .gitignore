@@ -4,10 +4,13 @@ __pycache__/
 venv/
 # 大文件:语料与 tokenizer 不入库(用户从 minimind 自行放置)
 dataset/*.jsonl
+dataset/*.parquet
 model/tokenizer.json
 model/tokenizer_config.json
 # checkpoint
 out/
 *.pth
+# VLM 视觉编码器权重(用户从 HF 自行放置)
+model/siglip2-base-p32-256-ve/
 # 训练曲线
 images/*.png
