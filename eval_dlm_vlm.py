@@ -22,11 +22,13 @@ from trainer.trainer_utils import init_vlm_model
 def _load_sample_image(parquet_path, idx=0):
     """从 parquet 取第 idx 行的 image_bytes + conversations(默认 user 第一句)。"""
     pf = pq.ParquetFile(parquet_path)
-    tbl = pf.read_row_group(idx // 5000, columns=['image_bytes', 'conversations']) \
-        if False else pf.read_row_group(0, columns=['image_bytes', 'conversations'])
+    # 每 row_group 5000 行;idx 映射到对应 row_group 的局部行
+    rg = idx // 5000
+    local = idx % 5000
+    tbl = pf.read_row_group(rg, columns=['image_bytes', 'conversations'])
     import json
-    row_img = tbl.column('image_bytes')[0].as_py()
-    row_conv = tbl.column('conversations')[0].as_py()
+    row_img = tbl.column('image_bytes')[local].as_py()
+    row_conv = tbl.column('conversations')[local].as_py()
     if isinstance(row_conv, str):
         row_conv = json.loads(row_conv)
     return row_img, row_conv
