@@ -1,6 +1,8 @@
 torch>=2.0
 transformers>=4.40
 tokenizers>=0.15
-datasets>=2.14
 streamlit>=1.30
 pytest>=7.0
+# 多模态 VLM(Part 2)
+pillow>=10.0
+pyarrow>=14.0
