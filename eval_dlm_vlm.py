@@ -1,5 +1,5 @@
 """
-mind-diffusion-v 推理与对话:给图 + prompt,扩散采样出跟图相关的中文。
+minimind-diffusion-v 推理与对话:给图 + prompt,扩散采样出跟图相关的中文。
 对照 eval_dlm.py,差别只在:(1) 从 vlm_sft/vlm_align 加载 VLM;(2) prompt 里展开
 <image> 成 64 个 <|image_pad|> 占位符;(3) generate 传 pixel_values。
 """
@@ -53,7 +53,7 @@ TEST_PROMPTS = [
 
 
 def main():
-    parser = argparse.ArgumentParser(description='mind-diffusion-v 推理与对话')
+    parser = argparse.ArgumentParser(description='minimind-diffusion-v 推理与对话')
     parser.add_argument('--hidden_size', type=int, default=768, help='隐藏维度')
     parser.add_argument('--num_hidden_layers', type=int, default=8, help='层数')
     parser.add_argument('--from_weight', type=str, default='vlm_sft',

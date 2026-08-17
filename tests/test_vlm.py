@@ -84,7 +84,7 @@ def test_generate_with_image_runs():
     m = DLMForVLM(cfg)
     m.vision_encoder = MagicMock()
     m.vision_encoder.return_value = MagicMock(last_hidden_state=torch.randn(1, 8, 64))
-    # 训几步让 argmax 不塌缩到 <mask>(同 mind-diffusion test_sampling 经验)
+    # 训几步让 argmax 不塌缩到 <mask>(同 minimind-diffusion test_sampling 经验)
     opt = torch.optim.AdamW([p for p in m.parameters() if p.requires_grad], lr=3e-3)
     m.train()
     ids = torch.randint(0, 99, (2, 16))

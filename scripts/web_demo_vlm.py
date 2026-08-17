@@ -101,7 +101,7 @@ def generate_stream(model, tokenizer, cfg, device, prompt, pixel,
 
 
 def main():
-    st.title('mind-diffusion-v')
+    st.title('minimind-diffusion-v')
     st.caption('LLaDA v1 掩码扩散 VLM · SigLIP2 + projector · 给图迭代揭开文本')
     model, tokenizer, cfg, device = load_model()
 

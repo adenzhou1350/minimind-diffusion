@@ -1,8 +1,8 @@
-# mind-diffusion
+# minimind-diffusion
 
 > **Less is more — a diffusion-model take on minimind & minimind-v**
 
-`mind-diffusion` ports [minimind](https://github.com/jingyaogong/minimind)'s "train a small LLM from
+`minimind-diffusion` ports [minimind](https://github.com/jingyaogong/minimind)'s "train a small LLM from
 scratch in PyTorch" minimalism onto a **Diffusion Language Model (DLM)**: instead of generating tokens
 left-to-right, it starts from an all-`<mask>` sequence and **iteratively unmasks** it, like drafting and
 then refining.
@@ -36,7 +36,7 @@ One repo, two tracks:
 
 A **minimal, runnable, principle-first** diffusion LM project, aligned with minimind's style:
 
-| Dimension | minimind (AR) | mind-diffusion (DLM) |
+| Dimension | minimind (AR) | minimind-diffusion (DLM) |
 |---|---|---|
 | Generation | autoregressive (L→R next token) | masked diffusion (all-mask → iterative unmask) |
 | Attention | causal | **bidirectional** (no causal mask) |
@@ -214,7 +214,7 @@ Sampling defaults: `steps=128, gen_length=128, temperature=0.7, repetition_penal
 
 ## 6. Differences from minimind
 
-| Dimension | minimind | mind-diffusion |
+| Dimension | minimind | minimind-diffusion |
 |---|---|---|
 | Generation | autoregressive | masked diffusion |
 | Attention | causal | bidirectional |

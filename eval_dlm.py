@@ -1,5 +1,5 @@
 """
-mind-diffusion 推理与对话(对照 minimind eval_llm.py)
+minimind-diffusion 推理与对话(对照 minimind eval_llm.py)
 """
 import os
 import sys
@@ -20,7 +20,7 @@ PROMPTS = [
 
 
 def main():
-    parser = argparse.ArgumentParser(description='mind-diffusion 推理与对话')
+    parser = argparse.ArgumentParser(description='minimind-diffusion 推理与对话')
     parser.add_argument('--hidden_size', type=int, default=768, help='隐藏维度')
     parser.add_argument('--num_hidden_layers', type=int, default=8, help='层数')
     parser.add_argument('--from_weight', type=str, default='sft', help='加载哪个权重(pretrain/sft)')

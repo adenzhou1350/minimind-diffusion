@@ -1,5 +1,5 @@
 """
-mind-diffusion 交互式对话(对照 minimind 的对话脚本)
+minimind-diffusion 交互式对话(对照 minimind 的对话脚本)
 用法: python chat_dlm.py [--hidden_size 768 --num_hidden_layers 8 --from_weight sft]
 输 'exit' 或 'quit' 退出。多轮对话(带历史)。
 """
@@ -14,7 +14,7 @@ from trainer.trainer_utils import init_model
 
 
 def main():
-    parser = argparse.ArgumentParser(description='mind-diffusion 交互式对话')
+    parser = argparse.ArgumentParser(description='minimind-diffusion 交互式对话')
     parser.add_argument('--hidden_size', type=int, default=768, help='隐藏维度')
     parser.add_argument('--num_hidden_layers', type=int, default=8, help='层数')
     parser.add_argument('--from_weight', type=str, default='sft', help='加载哪个权重(pretrain/sft)')
@@ -36,7 +36,7 @@ def main():
 
     # 对话历史:每轮 [user, assistant] 交替,渲染成 minimind chat template
     history = []  # list of (role, content)
-    print('mind-diffusion 对话(输入 exit 退出)')
+    print('minimind-diffusion 对话(输入 exit 退出)')
     print(f'  [模型 {args.from_weight}_{args.hidden_size} | steps={args.steps} temp={args.temperature} rep={args.repetition_penalty}]')
     print()
 

@@ -1,7 +1,7 @@
 """
-🌏🌎🌍 mind-diffusion-v: diffusion 版 minimind-v (多模态掩码扩散) 🌏🌎🌍
+🌏🌎🌍 minimind-diffusion-v: diffusion 版 minimind-v (多模态掩码扩散) 🌏🌎🌍
 
-文本侧复用 mind-diffusion 的 DLMForMD(双向 transformer + 均匀权重掩码 CE)。
+文本侧复用 minimind-diffusion 的 DLMForMD(双向 transformer + 均匀权重掩码 CE)。
 vision 侧:冻结 SigLIP2 + MLP projector,vision token 填到 <|image_pad|> 占位符
 (观测条件,永不掩),扩散 loss 只掩文本。LLaVA 前缀注入(非 cross-attn)。
 """

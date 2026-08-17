@@ -1,5 +1,5 @@
 """
-🌏🌎🌍 mind-diffusion model: LLaDA v1 masked-diffusion language model 🌏🌎🌍
+🌏🌎🌍 minimind-diffusion model: LLaDA v1 masked-diffusion language model 🌏🌎🌍
 
 与 minimind 的差异:
   1. Attention 去 causal mask -> 双向(is_causal=False)
@@ -51,7 +51,7 @@ class DLMConfig(PretrainedConfig):
         self.tie_word_embeddings = tie_word_embeddings
         self.dropout = dropout
         self.mask_token_id = mask_token_id
-        self.image_pad_token_id = image_pad_token_id  # VLM 视觉占位符(mind-diffusion-v 用)
+        self.image_pad_token_id = image_pad_token_id  # VLM 视觉占位符(minimind-diffusion-v 用)
         self.bos_token_id = bos_token_id
         self.eos_token_id = eos_token_id
         self.use_moe = use_moe  # 保留字段但不启用(跟 minimind 一致)

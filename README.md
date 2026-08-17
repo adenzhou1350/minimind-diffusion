@@ -1,8 +1,8 @@
-# mind-diffusion
+# minimind-diffusion
 
 > **大道至简 —— diffusion 版 minimind & minimind-v**
 
-`mind-diffusion` 把 [minimind](https://github.com/jingyaogong/minimind) 的"从 0 用 PyTorch 训一个小 LLM"的极简哲学,
+`minimind-diffusion` 把 [minimind](https://github.com/jingyaogong/minimind) 的"从 0 用 PyTorch 训一个小 LLM"的极简哲学,
 移植到**扩散式语言模型 (Diffusion Language Model, DLM)** 上:不左到右一个个生成 token,
 而是从一个**全 `<mask>`** 的序列出发,像"打草稿再精修"一样**迭代揭开**。
 
@@ -34,7 +34,7 @@
 
 一个**最小、能跑通、讲明白原理**的扩散语言模型项目,和 minimind 风格对齐:
 
-| 维度 | minimind(AR) | mind-diffusion(DLM) |
+| 维度 | minimind(AR) | minimind-diffusion(DLM) |
 |---|---|---|
 | 生成范式 | 自回归(左→右 next token) | 掩码扩散(全 mask→迭代揭) |
 | 注意力 | causal(因果) | **双向**(去 causal mask) |
@@ -203,7 +203,7 @@ intermediate_size = ceil(π·768/64)*64, rope_theta=1e6, tied embeddings
 
 ## 6. 与 minimind 的差异速查
 
-| 维度 | minimind | mind-diffusion |
+| 维度 | minimind | minimind-diffusion |
 |---|---|---|
 | 生成范式 | 自回归 | 掩码扩散 |
 | 注意力 | causal | 双向 |

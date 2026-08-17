@@ -26,7 +26,7 @@ def collate(batch):
 
 def main():
     # ========== 1. 初始化环境和随机种子 ==========
-    parser = argparse.ArgumentParser(description='mind-diffusion-v Stage 1 对齐')
+    parser = argparse.ArgumentParser(description='minimind-diffusion-v Stage 1 对齐')
     parser.add_argument('--epochs', type=int, default=1, help='训练轮数')
     parser.add_argument('--batch_size', type=int, default=4, help='批次大小')
     parser.add_argument('--learning_rate', type=float, default=4e-4, help='学习率')

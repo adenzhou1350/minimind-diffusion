@@ -16,7 +16,7 @@ from trainer.trainer_utils import (get_lr, SkipBatchSampler, init_model, lm_chec
 
 def main():
     # ========== 1. 初始化环境和随机种子 ==========
-    parser = argparse.ArgumentParser(description='mind-diffusion SFT')
+    parser = argparse.ArgumentParser(description='minimind-diffusion SFT')
     parser.add_argument('--epochs', type=int, default=3, help='训练轮数')
     parser.add_argument('--batch_size', type=int, default=16, help='批次大小')
     parser.add_argument('--learning_rate', type=float, default=2.5e-5, help='学习率')

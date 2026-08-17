@@ -78,7 +78,7 @@ def generate_stream(model, tokenizer, cfg, device, prompt, gen_length=128, steps
 
 
 def main():
-    st.title('mind-diffusion')
+    st.title('minimind-diffusion')
     st.caption('LLaDA v1 掩码扩散语言模型 · 从全 <mask> 迭代揭开')
     model, tokenizer, cfg, device = load_model()
     prompt = st.text_input('Prompt', value='为什么天空是蓝色的?')
