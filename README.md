@@ -1,12 +1,31 @@
 # minimind-diffusion
 
-> **大道至简 —— diffusion 版 minimind & minimind-v**
+中文 · [English](README_en.md)
+
+从小模型开始，理解「把文字遮住，再逐步补回来」的扩散生成过程。用 PyTorch 串起训练、采样和可视化，并尝试加入图像条件。
+
+**当前定位：学习与复现实验。** 仓库不附带训练好的权重或数据；文本对话仍不稳定，已记录的图文实验也没有可靠地根据图片回答。可以先运行小模型测试，再准备 tokenizer 和数据开始训练。
+
+## 先跑一个不用下载模型的例子
+
+```bash
+git clone https://github.com/adenzhou1350/minimind-diffusion.git
+cd minimind-diffusion
+python -m venv .venv
+source .venv/bin/activate  # Windows PowerShell: .venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python -m pytest tests/test_model.py tests/test_loss.py -q
+```
+
+这组测试使用随机初始化的小模型，检查张量形状、双向注意力和掩码损失，不需要 tokenizer、数据集或 checkpoint。测试通过只代表这些基础行为符合预期，生成效果需要另行训练和评估。
+
+想继续训练：[文本流程](#3-快速开始文本-dlm) · [图文流程](#4-扩展多模态-vlm) · [已有实验记录与局限](#7-已知问题--诚实记录)
 
 `minimind-diffusion` 把 [minimind](https://github.com/jingyaogong/minimind) 的"从 0 用 PyTorch 训一个小 LLM"的极简哲学,
 移植到**扩散式语言模型 (Diffusion Language Model, DLM)** 上:不左到右一个个生成 token,
 而是从一个**全 `<mask>`** 的序列出发,像"打草稿再精修"一样**迭代揭开**。
 
-实现的是 **LLaDA v1**(Nie et al., 2025)的**全序列掩码扩散**配方,并在其上加一条
+参考 **LLaDA v1**(Nie et al., 2025)的**全序列掩码扩散**思路；当前训练采用均匀加权与截断掩码比例（见 §7.1）,并在其上加一条
 视觉路径([minimind-v](https://github.com/jingyaogong/minimind-v) 风格),从**文本 DLM** 一路走到**图文多模态 VLM**。
 
 一个仓库,两条线:
@@ -40,7 +59,7 @@
 | 注意力 | causal(因果) | **双向**(去 causal mask) |
 | KV cache | 有 | 无(每次吃整条) |
 | 时间步 t | 无 | 有(掩码比例),但**不喂模型** |
-| loss | next-token CE | **1/t 加权掩码 CE**(似然上界) |
+| loss | next-token CE | **均匀加权掩码 CE**，掩码比例 [0.1, 0.5]（当前代码） |
 | generate | AR 循环 + KV cache | 扩散采样 + remasking |
 | 词表 | 6400 | 6401(+`<mask>`) |
 
@@ -61,11 +80,13 @@ JSONL 数据、vocab 6400 BPE、双语注释、`🌏🌎🌍` 分段。多模态
   去**预测被掩掉位置的原 token**;推理时从**全 `<mask>`** 出发,迭代 N 步逐步揭开。
 
 ### 2.2 前向加噪 q(x_t | x_0)
+
+以下描述原始配方；当前 `forward` 采样 `t ~ U(0.1, 0.5)`。
 每条序列采一个掩码比例 `t ~ U(0,1)`,每个真实 token 位**独立**以概率 `t` 被掩成 `<mask>`:
 - `t=0`:全干净;`t=1`:全掩。
 - 掩码比例**随 t 线性增长**——这是跟 BERT(固定 15%)的关键区别。
 
-### 2.3 训练 loss(带 1/t 权重,似然上界)
+### 2.3 原始训练 loss（当前代码已改为均匀权重）
 ```
 L(θ) = - E[ (1/t) · Σ_{被掩位 i} CE(p_θ(x_0^i | x_t), x_0^i) ]
 ```
@@ -114,7 +135,7 @@ pip install -r requirements.txt
 ### 3.3 预训练
 ```bash
 python trainer/train_pretrain.py
-# 小档(8GB 显卡 / CPU 冒烟):
+# 较小配置（显存需求取决于序列长度、batch 和环境）:
 python trainer/train_pretrain.py --hidden_size 512 --num_hidden_layers 6 --batch_size 4 --max_seq_len 128
 ```
 产出 `out/pretrain_768.pth`(或 `_512.pth`)。
@@ -163,7 +184,7 @@ LLaVA 式前缀注入(非 cross-attn)。`vocab_size=6401` 不变(image_pad 复�
 python trainer/train_pretrain_vlm.py
 # Stage 2 SFT:LLM 首尾层 + final norm + lm_head + projector(lr 5e-6, freeze_mode=1)
 python trainer/train_sft_vlm.py
-# 小档(8GB 显卡):--max_seq_len 256 --batch_size 16 --accumulation_steps 8
+# 较小 batch 配置:--max_seq_len 256 --batch_size 16 --accumulation_steps 8
 ```
 Stage1 产出 `out/vlm_align_768.pth`,Stage2 产出 `out/vlm_sft_768.pth`。
 Stage2 每 1000 步中途存盘(单 epoch ~47h,崩了不丢);`--skip N --from_weight vlm_sft` 可从第 N 个 accum step 续训。
@@ -191,7 +212,7 @@ hidden_size=768, num_hidden_layers=8, num_attention_heads=8,
 num_key_value_heads=4 (GQA 2:1), vocab_size=6401,
 intermediate_size = ceil(π·768/64)*64, rope_theta=1e6, tied embeddings
 ```
-小档冒烟(8GB / CPU):`hidden_size=512, num_hidden_layers=6`。
+较小训练配置:`hidden_size=512, num_hidden_layers=6`。
 
 采样默认:`steps=128, gen_length=128, temperature=0.7, repetition_penalty=1.3, low_confidence=True`。
 - 论文最优是 `steps ≈ gen_length`(慢);教学版 128 够演示。
@@ -225,7 +246,7 @@ intermediate_size = ceil(π·768/64)*64, rope_theta=1e6, tied embeddings
 
 ## 7. 已知问题 / 诚实记录
 
-> 这一节是这个仓库最有价值的部分:一个 64M 扩散模型**能学到什么、学不到什么**,原样记录。
+> 这一节是这个仓库最有价值的部分:一个 64M 扩散模型**能学到什么、学不到什么**,保留原有实验记录。下述指标尚未在本次文档更新中复跑；原因分析属于实验假设，不能直接推广到其他模型或规模。
 
 ### 7.1 loss 配方:从 LLaDA 的 1/t 改成均匀权重(关键发现)
 原版 LLaDA 用 `1/t` 加权掩码 CE(数学上是似然上界,严谨),`t~U(0,1)`。但**在小模型 + 少数据上不工作**:held-out 掩码重建准确率只有 **0–5%**。
@@ -249,7 +270,7 @@ intermediate_size = ceil(π·768/64)*64, rope_theta=1e6, tied embeddings
 - ❌ **知识幻觉**("1+1=0.2133"、"水星反射太阳")
 - ❌ **多轮不看上文**
 
-诊断:**训练/推理分布 gap**(训练只掩部分,推理全掩开头,小模型跨不过)+ **规模不够**(LLaDA 原版 8B+2.3T 压住,64M 压不住)。多 epoch 边际递减(1→2 epoch,acc 41→44,+3 个点),撞到规模墙。要质变到"稳定对话",需更大模型 / 更多数据——超出 minimind 同档范围。
+诊断:**训练/推理分布 gap**(训练只掩部分,推理全掩开头,小模型跨不过)+ **模型与数据规模可能不足**(LLaDA 原版 8B+2.3T 压住,64M 压不住)。多 epoch 边际递减(1→2 epoch,acc 41→44,+3 个点),撞到规模墙。要质变到"稳定对话",需更大模型 / 更多数据——超出 minimind 同档范围。
 
 ### 7.4 VLM:学会格式,学不会看图(多模态侧现状)
 把 minimind-v 的"LLM 继承 + <50 行 vision 路径"思路搬到扩散侧:vision token 作为**观测条件**注入(填占位符、永不掩),扩散 loss 仍在文本侧做。两阶段(对齐只训 projector → SFT 解冻首尾层)。

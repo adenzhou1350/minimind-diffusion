@@ -1,13 +1,30 @@
 # minimind-diffusion
 
-> **Less is more — a diffusion-model take on minimind & minimind-v**
+[中文](README.md) · English
+
+A small PyTorch project for learning masked text diffusion, with training, sampling and an experimental image-text extension.
+
+**Current scope:** a learning and reproduction project. The repository does not ship trained weights or datasets; text dialogue remains limited and the recorded VLM experiments do not reliably ground answers in images. Start with the small model tests, then prepare the tokenizer and data for training.
+
+## First run: small CPU tests
+
+```bash
+git clone https://github.com/adenzhou1350/minimind-diffusion.git
+cd minimind-diffusion
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+python -m pytest tests/test_model.py tests/test_loss.py -q
+```
+
+These tests use small random models and need no downloaded tokenizer, checkpoint or dataset. They check shapes, bidirectional attention and masked loss; passing them is not a measure of generation quality.
 
 `minimind-diffusion` ports [minimind](https://github.com/jingyaogong/minimind)'s "train a small LLM from
 scratch in PyTorch" minimalism onto a **Diffusion Language Model (DLM)**: instead of generating tokens
 left-to-right, it starts from an all-`<mask>` sequence and **iteratively unmasks** it, like drafting and
 then refining.
 
-It implements the **full-sequence masked diffusion** recipe of **LLaDA v1** (Nie et al., 2025), and adds a
+It builds on **full-sequence masked diffusion** from **LLaDA v1** (Nie et al., 2025), and adds a
 vision path on top ([minimind-v](https://github.com/jingyaogong/minimind-v) style) — going all the way from
 a **text DLM** to an **image-text multimodal VLM**.
 
@@ -42,7 +59,7 @@ A **minimal, runnable, principle-first** diffusion LM project, aligned with mini
 | Attention | causal | **bidirectional** (no causal mask) |
 | KV cache | yes | no (whole sequence each step) |
 | Timestep t | none | yes (mask ratio), but **not fed to the model** |
-| Loss | next-token CE | **1/t-weighted masked CE** (likelihood bound) |
+| Loss | next-token CE | **uniform masked CE**, with mask ratio in [0.1, 0.5] (current implementation) |
 | generate | AR loop + KV cache | diffusion sampling + remasking |
 | Vocab | 6400 | 6401 (+`<mask>`) |
 

@@ -14,3 +14,8 @@ out/
 model/siglip2-base-p32-256-ve/
 # 训练曲线
 images/*.png
+.env
+.env.*
+!.env.example
+*.pem
+*.key
