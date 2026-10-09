@@ -2,7 +2,25 @@
 
 [中文](README.md) · English
 
-A small PyTorch project for learning masked text diffusion, with training, sampling and an experimental image-text extension.
+**Mask the text, then reveal it step by step. Learn masked diffusion with a small PyTorch model.**
+
+Follow bidirectional attention and masked loss through training, sampling and visualization, then explore an experimental image-text extension. Built for readers who want to compare diffusion and autoregressive generation in code.
+
+[Start with CPU tests](#first-run-small-cpu-tests) · [Core principles](#2-core-principles) · [Text training](#3-quick-start-text-dlm) · [Experiment notes](#7-known-issues--honest-notes) · [Author's learning hub](https://adenzhou1350.github.io/learn/)
+
+## A path through the code
+
+| Step | What to inspect | Entry point |
+|---|---|---|
+| Small model mechanics | Bidirectional attention, shapes and masked loss | [Model tests](tests/test_model.py), [loss tests](tests/test_loss.py) |
+| Text training | Random masking, pretraining and response-only SFT | [Model](model/model_dlm.py), [pretraining](trainer/train_pretrain.py) |
+| Sampling | Predict, remask low-confidence tokens, repeat | [Sampling tests](tests/test_sampling.py), [Web demo](scripts/web_demo.py) |
+| Image-text experiments | Frozen vision encoder, projector and diffusion | [Vision path](model/model_dlm_v.py), [limitations](#7-known-issues--honest-notes) |
+
+```text
+Training: clean text → random masks → bidirectional Transformer → masked loss
+Sampling: all masks → predict → keep confident tokens → repeat until revealed
+```
 
 **Current scope:** a learning and reproduction project. The repository does not ship trained weights or datasets; text dialogue remains limited and the recorded VLM experiments do not reliably ground answers in images. Start with the small model tests, then prepare the tokenizer and data for training.
 
