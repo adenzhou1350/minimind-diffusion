@@ -262,7 +262,7 @@ intermediate_size = ceil(π·768/64)*64, rope_theta=1e6, tied embeddings
 
 ## 7. 已知问题 / 诚实记录
 
-这一节保留历史试跑的观察。**公开仓库和可取得的 master 历史没有附对应原始日志、逐样本结果或 checkpoint**，因此下面的数字不作为已复现的 benchmark。代码、文字记录的固定版本和缺失项集中在[实验出处](docs/experiment-evidence.md)；本次只核对文档与源码，没有重跑训练。
+这一节保留历史试跑的观察。2026-10-13 从旧本机实验目录找回了一份 [VLM 训练日志](docs/evidence/README.md)，现已原样附上。**文本重建指标仍缺对应原始日志，逐样本评测和 checkpoint 也未发布**；不能把下面的历史数字都当作已复现的 benchmark。固定版本、找回的产物和缺失项集中在[实验出处](docs/experiment-evidence.md)，本次没有重跑历史训练。
 
 ### 7.1 loss 配方：当前实现与历史记录
 
@@ -299,7 +299,9 @@ intermediate_size = ceil(π·768/64)*64, rope_theta=1e6, tied embeddings
 
 视觉路径将编码后的图片填入 `<|image_pad|>`，这些位置不参与掩码；训练分为 projector 对齐和部分语言模型层解冻两阶段。实现见[视觉模型](model/model_dlm_v.py)、[对齐训练](trainer/train_pretrain_vlm.py)和 [SFT](trainer/train_sft_vlm.py)。
 
-[当时的 README](https://github.com/adenzhou1350/minimind-diffusion/blob/24a64b72f876fcc5e3aad2c7ffe0b08277f6914c/README.md)记下 Stage 2 完成 22,691 步、约 30 小时、最终 loss 2.14（过程约 1.8–2.4）。这些是未附训练日志的历史值，不是当前配置的耗时承诺。
+[找回的原始训练日志](docs/evidence/vlm-sft-20260811-20260814.log)最后记录的是 `step 22690/22691, loss 2.1442`，随后打印了保存 `vlm_sft_768.pth` 的消息。首末训练指标时间为 `2026-08-11 20:54:07` 与 `2026-08-14 02:40:07`，相隔 **53 小时 46 分钟**。[旧 README](https://github.com/adenzhou1350/minimind-diffusion/blob/24a64b72f876fcc5e3aad2c7ffe0b08277f6914c/README.md)中的“约 30 小时”不能由此支持；日志跨度也不是 GPU 利用时间或当前配置的耗时承诺。
+
+这份日志没有 checkpoint 哈希、完整命令、数据指纹或源码版本；末条训练指标和保存消息不能证明逐步核验了全部 22,691 步，也不能确认权重身份或可取得性。[文件校验与保留的原始残行](docs/evidence/README.md)另有说明。
 
 当时观察到：输出具备 ChatML 和描述图片的格式，但换图后仍出现相似幻觉；保留图片占位符却不传图时，会出现重复输出。公开材料没有逐图预测或换图、去图对照集，所以这里保留的是失败观察，不能量化 grounding 能力。
 

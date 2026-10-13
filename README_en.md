@@ -274,7 +274,7 @@ The model method has a different default temperature; check the entry point you 
 
 ## 7. Known issues / honest notes
 
-These are observations from historical runs. **The public repository and available master history do not include the matching raw logs, per-example results or checkpoints.** The numbers below are not reproduced benchmarks. Fixed source versions and missing evidence are listed in [experiment sources](docs/experiment-evidence.en.md). This documentation update checked source and history; it did not rerun training.
+These are observations from historical runs. One [VLM training log](docs/evidence/README.md) was recovered from an old local experiment directory on 2026-10-13 and is now included unchanged. **The text-reconstruction metrics still lack matching raw logs; per-example evaluation results and checkpoints are not published.** The historical numbers are not all reproduced benchmarks. Fixed sources, recovered artifacts and remaining gaps are listed in [experiment sources](docs/experiment-evidence.en.md). Historical training was not rerun for this update.
 
 ### 7.1 Loss recipe: current code and historical observations
 
@@ -311,9 +311,11 @@ Partial masking during training and all-mask starts at inference may create a di
 
 Encoded images fill `<|image_pad|>` positions, which are never masked. Training first aligns the projector, then unfreezes selected language-model layers. See the [vision model](model/model_dlm_v.py), [alignment trainer](trainer/train_pretrain_vlm.py) and [SFT trainer](trainer/train_sft_vlm.py).
 
-The [historical README](https://github.com/adenzhou1350/minimind-diffusion/blob/24a64b72f876fcc5e3aad2c7ffe0b08277f6914c/README.md) reports 22,691 Stage 2 steps, about 30 hours, and final loss 2.14 (roughly 1.8–2.4 during training). These lack matching logs and are not runtime estimates for the current configuration.
+The [recovered raw training log](docs/evidence/vlm-sft-20260811-20260814.log) ends with `step 22690/22691, loss 2.1442`, followed by a message that `vlm_sft_768.pth` was saved. Its first and last training metrics are timestamped `2026-08-11 20:54:07` and `2026-08-14 02:40:07`: a span of **53 hours 46 minutes**. It does not support the [old README](https://github.com/adenzhou1350/minimind-diffusion/blob/24a64b72f876fcc5e3aad2c7ffe0b08277f6914c/README.md)'s “about 30 hours.” This span is not GPU utilization time or a runtime estimate for the current configuration.
 
-It records ChatML and image-description formatting, but similar hallucinations after changing the image; leaving image placeholders without supplying an image caused repetition. Per-image predictions and image-swap/no-image controls are not published, so these remain failure observations rather than a quantitative grounding evaluation.
+The log contains no checkpoint hash, complete command, data fingerprints or source revision. Its final metric and save message do not verify every one of the 22,691 planned steps or establish checkpoint identity or availability. See [file verification and preserved partial lines](docs/evidence/README.md).
+
+The historical README records ChatML and image-description formatting, but similar hallucinations after changing the image; leaving image placeholders without supplying an image caused repetition. Per-image predictions and image-swap/no-image controls are not published, so these remain failure observations rather than a quantitative grounding evaluation.
 
 The suggestion that visual tokens act as a format trigger is a hypothesis. Useful next checks are image-swap sensitivity, projector gradients and freezing settings before attributing the result to model or data scale.
 

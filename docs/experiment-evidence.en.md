@@ -2,7 +2,7 @@
 
 [中文](experiment-evidence.md) · English · [Back to README](../README_en.md)
 
-Checked on 2026-10-13 against source [0a4e5d3](https://github.com/adenzhou1350/minimind-diffusion/tree/0a4e5d3cf5ff3a78381d126ce131702352a79b1b). This page separates code settings, historical written observations and unpublished artifacts. Training was not rerun for this documentation check.
+Checked on 2026-10-13 against source [0a4e5d3](https://github.com/adenzhou1350/minimind-diffusion/tree/0a4e5d3cf5ff3a78381d126ce131702352a79b1b). This page separates code settings, historical written observations, one VLM training log recovered from an old local directory, and artifacts still unpublished. Historical training was not rerun.
 
 ## Start with what can be checked directly
 
@@ -16,9 +16,12 @@ Checked on 2026-10-13 against source [0a4e5d3](https://github.com/adenzhou1350/m
 |---|---|---|
 | 23M screening: about 5% versus 25.5% reconstruction accuracy, the latter at 3,000 steps | [Loss-change commit message `fb96b34`](https://github.com/adenzhou1350/minimind-diffusion/commit/fb96b344f5e58b7f9074de72e19473afdee67927) | Raw outputs for both runs, complete configurations and asset fingerprints |
 | Old implementation 0–5%; later result labeled 64M: 41.5%, loss 7.4→1.7; approximately 41%→44% from epoch 1 to 2 | [Historical README `c080996`](https://github.com/adenzhou1350/minimind-diffusion/blob/c08099625cbd36fec3bad8b2600d0f4036da03c2/README.md) | Matching logs, checkpoints, evaluation scripts and configuration mapping |
-| VLM Stage 2: 22,691 steps, about 30 hours, final loss 2.14; similar hallucinations after swapping images | [Historical README `24a64b7`](https://github.com/adenzhou1350/minimind-diffusion/blob/24a64b72f876fcc5e3aad2c7ffe0b08277f6914c/README.md) | Training logs, per-image predictions, image sources and fixed controls |
+| VLM Stage 2: last training metric `22690/22691`, loss `2.1442`, then a save message | [Recovered raw log](evidence/vlm-sft-20260811-20260814.log), [verification notes](evidence/README.md) | Checkpoint hash, complete command, data fingerprints and source revision; a save message does not verify weight contents |
+| VLM: similar hallucinations after swapping images | [Historical README `24a64b7`](https://github.com/adenzhou1350/minimind-diffusion/blob/24a64b72f876fcc5e3aad2c7ffe0b08277f6914c/README.md) | Per-image predictions, image sources and fixed controls; training loss does not establish grounding quality |
 
-These links establish what was written at the time. The full available public master history was checked; matching raw logs, per-example results and checkpoints were not found. A README is not a substitute for those artifacts. The 23M screening and later 64M record are not a controlled comparison with one shared configuration.
+The README and commit links establish what was written at the time. At the source baseline above, its full public master history had no matching raw logs, per-example results or checkpoints. The VLM log in the table was subsequently recovered from the author's old local experiment directory and published; text-side logs remain missing. The 23M screening and later 64M record are not a controlled comparison with one shared configuration.
+
+The recovered log spans **53 hours 46 minutes** between its first and last training metrics (`2026-08-11 20:54:07` to `2026-08-14 02:40:07`). This does not support the old “about 30 hours” estimate and is not GPU utilization time. Duplicate final save messages and a partial line are preserved byte-for-byte. SHA-256: `af63cb4c7cf16ecc4828991a828e528463b78aa999a88075ed7ebc8f55391dfe`. See [log notes](evidence/README.md) for provenance, the line-by-line check and limits.
 
 ## What the screening scripts actually do
 

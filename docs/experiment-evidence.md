@@ -2,7 +2,7 @@
 
 中文 · [English](experiment-evidence.en.md) · [回到 README](../README.md)
 
-核对日期：2026-10-13。代码基线：[0a4e5d3](https://github.com/adenzhou1350/minimind-diffusion/tree/0a4e5d3cf5ff3a78381d126ce131702352a79b1b)。本页区分能从代码确认的设置、历史文字记录，以及目前没有公开的产物。文档核对没有重跑训练。
+核对日期：2026-10-13。代码基线：[0a4e5d3](https://github.com/adenzhou1350/minimind-diffusion/tree/0a4e5d3cf5ff3a78381d126ce131702352a79b1b)。本页区分能从代码确认的设置、历史文字记录、从旧本机目录找回的一份 VLM 训练日志，以及目前仍未公开的产物。没有重跑历史训练。
 
 ## 先从能直接检查的部分开始
 
@@ -16,9 +16,12 @@
 |---|---|---|
 | 23M 筛选，约 5% 与 25.5% 重建准确率，后者为 3,000 步 | [loss 修改提交说明 `fb96b34`](https://github.com/adenzhou1350/minimind-diffusion/commit/fb96b344f5e58b7f9074de72e19473afdee67927) | 两组原始输出、完整运行配置和资产指纹 |
 | 旧实现 0–5%；后续标为 64M 的结果 41.5%，loss 7.4→1.7；1→2 epoch 约 41%→44% | [当时的 README `c080996`](https://github.com/adenzhou1350/minimind-diffusion/blob/c08099625cbd36fec3bad8b2600d0f4036da03c2/README.md) | 对应训练日志、checkpoint、评测脚本与配置的明确对应关系 |
-| VLM Stage 2：22,691 步、约 30 小时、最终 loss 2.14；换图后仍出现相似幻觉 | [当时的 README `24a64b7`](https://github.com/adenzhou1350/minimind-diffusion/blob/24a64b72f876fcc5e3aad2c7ffe0b08277f6914c/README.md) | 训练日志、逐图预测、图片来源与固定对照集 |
+| VLM Stage 2：末条训练指标 `22690/22691`、loss `2.1442`，随后有保存消息 | [找回的原始日志](evidence/vlm-sft-20260811-20260814.log)，[校验与说明](evidence/README.md) | checkpoint 哈希、完整命令、数据指纹及源码版本；保存消息不验证权重内容 |
+| VLM 换图后仍出现相似幻觉 | [当时的 README `24a64b7`](https://github.com/adenzhou1350/minimind-diffusion/blob/24a64b72f876fcc5e3aad2c7ffe0b08277f6914c/README.md) | 逐图预测、图片来源与固定对照集；训练 loss 不能证明看图可靠性 |
 
-这些链接证明的是“当时写下了什么”。核对了公开 master 的完整可取得历史，未找到对应原始日志、逐样本结果或 checkpoint；不能用一段 README 替代实验产物。23M 筛选与后续 64M 记录也不能拼成同配置的受控对比。
+README 和提交说明链接证明的是“当时写下了什么”。在上述代码基线的公开 master 历史中未找到对应原始日志、逐样本结果或 checkpoint；随后从作者旧本机实验目录找回并发布了表中的 VLM 训练日志，文本侧日志仍缺失。23M 筛选与后续 64M 记录不能拼成同配置的受控对比。
+
+找回的日志首末训练指标相隔 **53 小时 46 分钟**（`2026-08-11 20:54:07` 至 `2026-08-14 02:40:07`）。这不支持旧 README 的“约 30 小时”，也不能当作 GPU 利用时间。日志有末尾重复保存消息和残行，原字节全部保留；文件 SHA-256 为 `af63cb4c7cf16ecc4828991a828e528463b78aa999a88075ed7ebc8f55391dfe`。完整来源、逐行检查范围和限制见[日志说明](evidence/README.md)。
 
 ## 筛选脚本实际做了什么
 

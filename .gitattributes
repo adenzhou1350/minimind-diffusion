@@ -1,0 +1,2 @@
+# Preserve recovered evidence byte-for-byte, including its original line endings.
+docs/evidence/vlm-sft-20260811-20260814.log -text whitespace=cr-at-eol
