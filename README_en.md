@@ -6,7 +6,7 @@
 
 Follow bidirectional attention and masked loss through training, sampling and visualization, then explore an experimental image-text extension. Built for readers who want to compare diffusion and autoregressive generation in code.
 
-[Start with CPU tests](#first-run-small-cpu-tests) · [Core principles](#2-core-principles) · [Text training](#3-quick-start-text-dlm) · [Experiment notes](#7-known-issues--honest-notes) · [Author's learning hub](https://adenzhou1350.github.io/learn/)
+[Start with CPU tests](#first-run-small-cpu-tests) · [Core principles](#2-core-principles) · [Text training](#3-quick-start-text-dlm) · [Experiment sources](docs/experiment-evidence.en.md) · [Author's learning hub](https://adenzhou1350.github.io/learn/)
 
 ## A path through the code
 
@@ -30,12 +30,14 @@ Sampling: all masks → predict → keep confident tokens → repeat until revea
 git clone https://github.com/adenzhou1350/minimind-diffusion.git
 cd minimind-diffusion
 python -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate  # Windows PowerShell: .venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
 python -m pytest tests/test_model.py tests/test_loss.py -q
 ```
 
 These tests use small random models and need no downloaded tokenizer, checkpoint or dataset. They check shapes, bidirectional attention and masked loss; passing them is not a measure of generation quality.
+
+Next: [text training](#3-quick-start-text-dlm), [image-text training](#4-extension-multimodal-vlm), or [screening scripts and metric definitions](docs/experiment-evidence.en.md).
 
 `minimind-diffusion` ports [minimind](https://github.com/jingyaogong/minimind)'s "train a small LLM from
 scratch in PyTorch" minimalism onto a **Diffusion Language Model (DLM)**: instead of generating tokens
@@ -87,8 +89,8 @@ likewise adds only a <50-line vision path on top of the text DLM, mirroring mini
 minimal vision" pattern.
 
 **Who this is for**: anyone who wants to **verify from scratch that a diffusion model can actually be trained**,
-and see every engineering difference between masked diffusion and autoregression. It does not chase SOTA — it
-lays out both the minimal working pipeline and the **real scale wall** (§7).
+and see the engineering differences between masked diffusion and autoregression. The training and sampling
+code comes with historical notes on unstable dialogue and unreliable image grounding (§7).
 
 ---
 
@@ -101,22 +103,24 @@ lays out both the minimal working pipeline and the **real scale wall** (§7).
   from all-`<mask>` and unmask over N steps.
 
 ### 2.2 Forward noising q(x_t | x_0)
+The description below uses the original full range; the current `forward` samples `t ~ U(0.1, 0.5)`.
 Each sequence samples a mask ratio `t ~ U(0,1)`; each real token position is **independently** masked to
 `<mask>` with probability `t`:
 - `t=0`: all clean; `t=1`: all masked.
 - The mask ratio **grows linearly with t** — the key difference from BERT (fixed 15%).
 
-### 2.3 Training loss (1/t-weighted, a likelihood bound)
+### 2.3 Current training loss: uniformly weighted masked CE
 ```
-L(θ) = - E[ (1/t) · Σ_{masked i} CE(p_θ(x_0^i | x_t), x_0^i) ]
+Per sequence: sum(CE at masked positions) / max(number of masked tokens, 1)
+Per batch: mean of the per-sequence losses
 ```
-- Cross-entropy only at **masked positions**.
-- **The 1/t weight is the soul**: small t (few masked, easy) → large weight; large t (many masked, hard) →
-  small weight. This makes L(θ) an **upper bound** on the negative log-likelihood — unlike BERT/MaskGIT's
-  uniform-weight heuristic.
+- Cross-entropy only at **masked positions**; padding is excluded, and SFT restricts masking to the response.
+- The current code samples `t ~ U(0.1, 0.5)` with no additional `1/t` weight.
+- Read the [implementation](model/model_dlm.py) alongside the [loss tests](tests/test_loss.py).
 
-> In practice this "rigorous" recipe **does not work** on a small model, so it was changed to uniform
-> weighting — see the honest note in §7.1.
+The old implementation multiplied the per-sequence mean above by `1/t`. This describes a change within
+this repository, not evidence that the official LLaDA recipe fails on small models. See the
+[experiment sources](docs/experiment-evidence.en.md) for the historical notes and missing evidence.
 
 ### 2.4 Architecture: LLaMA without the causal mask
 The bidirectional transformer is a standard LLaMA decoder with the **causal mask turned off** (`is_causal=False`).
@@ -155,7 +159,7 @@ Copy from the [minimind](https://github.com/jingyaogong/minimind) repo:
 ### 3.3 Pretrain
 ```bash
 python trainer/train_pretrain.py
-# small profile (8GB GPU / CPU smoke):
+# smaller profile (memory needs depend on sequence length, batch and environment):
 python trainer/train_pretrain.py --hidden_size 512 --num_hidden_layers 6 --batch_size 4 --max_seq_len 128
 ```
 Produces `out/pretrain_768.pth` (or `_512.pth`).
@@ -206,7 +210,7 @@ minimind's reserved id 12, no new token).
 python trainer/train_pretrain_vlm.py
 # Stage 2 SFT: LLM first/last layers + final norm + lm_head + projector (lr 5e-6, freeze_mode=1)
 python trainer/train_sft_vlm.py
-# small profile (8GB GPU): --max_seq_len 256 --batch_size 16 --accumulation_steps 8
+# smaller batch configuration: --max_seq_len 256 --batch_size 16 --accumulation_steps 8
 ```
 Stage 1 → `out/vlm_align_768.pth`, Stage 2 → `out/vlm_sft_768.pth`.
 Stage 2 checkpoints every 1000 steps (one epoch ~47h, so a crash won't lose much);
@@ -237,13 +241,12 @@ hidden_size=768, num_hidden_layers=8, num_attention_heads=8,
 num_key_value_heads=4 (GQA 2:1), vocab_size=6401,
 intermediate_size = ceil(π·768/64)*64, rope_theta=1e6, tied embeddings
 ```
-Small smoke profile (8GB / CPU): `hidden_size=512, num_hidden_layers=6`.
+Smaller training configuration: `hidden_size=512, num_hidden_layers=6`.
 
-Sampling defaults: `steps=128, gen_length=128, temperature=0.7, repetition_penalty=1.3, low_confidence=True`.
-- The paper's optimum is `steps ≈ gen_length` (slow); 128 is enough for a teaching demo.
-- `temperature=0` collapses into repeated high-frequency tokens (a diffusion trait, opposite to AR); use **0.6–0.9**, >0.9 starts rambling.
-- `repetition_penalty` 1.2–1.5 breaks up repetition (bidirectional diffusion has no generation history, loops easily); 1.0 deadlocks, 2.0 forces gibberish.
-- `block_length` >0 enables semi-AR block generation (LLaDA 2 idea), must divide gen_length; more anti-repetition but choppier.
+[`eval_dlm.py`](eval_dlm.py) defaults to `steps=64, gen_length=128, temperature=0.7, repetition_penalty=1.3`.
+The model method has a different default temperature; check the entry point you use.
+- Historical trial runs reported repetition at `temperature=0`; `0.6–0.9` and `repetition_penalty=1.2–1.5` were used as tuning ranges. These observations lack a common evaluation record and may not transfer to other weights.
+- `block_length > 0` enables semi-autoregressive blocks and must divide `gen_length`. Earlier blocks stay fixed while tokens within a block are iteratively revealed; see [generate](model/model_dlm.py).
 
 ---
 
@@ -255,7 +258,7 @@ Sampling defaults: `steps=128, gen_length=128, temperature=0.7, repetition_penal
 | Attention | causal | bidirectional |
 | KV cache | yes | no |
 | Timestep t | none | yes, not fed to model |
-| Loss | next-token CE | uniform-weighted masked CE (original 1/t fails on small models, see §7.1) |
+| Loss | next-token CE | uniform-weighted masked CE (old implementation compared in §7.1) |
 | dataset returns | (input_ids, labels) | (input_ids, attention_mask[, response_mask]) |
 | Where masking happens | none | sampled live in forward (random each step) |
 | generate | AR + KV cache | diffusion sampling + low-conf remasking |
@@ -271,65 +274,54 @@ Sampling defaults: `steps=128, gen_length=128, temperature=0.7, repetition_penal
 
 ## 7. Known issues / honest notes
 
-> This section is the most valuable part of the repo: an honest record of what a 64M diffusion model
-> **can and cannot learn**.
+These are observations from historical runs. **The public repository and available master history do not include the matching raw logs, per-example results or checkpoints.** The numbers below are not reproduced benchmarks. Fixed source versions and missing evidence are listed in [experiment sources](docs/experiment-evidence.en.md). This documentation update checked source and history; it did not rerun training.
 
-### 7.1 Loss recipe: from LLaDA's 1/t to uniform weighting (key finding)
-The original LLaDA uses `1/t`-weighted masked CE (mathematically a likelihood bound, rigorous), `t~U(0,1)`.
-But **it does not work on a small model + little data**: held-out mask-reconstruction accuracy is only **0–5%**.
+### 7.1 Loss recipe: current code and historical observations
 
-Diagnosis: the 1/t weight lets gradients be dominated by "lightly-masked easy cases" (1/t explodes at small t),
-so the model only learns the token marginal, not "reconstruct from context". After screening 4 controls,
-**uniform weight + `t~U(0.1,0.5)`** pushes accuracy to **41.5%** (64M), with a healthy curve (loss 7.4→1.7).
+The current code uses uniformly weighted masked CE with `t ~ U(0.1, 0.5)`. The [loss-change commit](https://github.com/adenzhou1350/minimind-diffusion/commit/fb96b344f5e58b7f9074de72e19473afdee67927) records this implementation change.
 
-Cost: no longer a strict diffusion likelihood bound (NELBO) — more like BERT-style MLM + diffusion sampling.
-**The denoising-matching objective is still there, the sampling math is unchanged**; only the trade-off weight
-is no longer optimal. LLaDA 2 itself clamps the mask ratio to `[α_min,α_max]`, on the same path. Honest label:
-deviates from the original for small-model learnability.
+Two separate written records exist:
 
-### 7.2 Sampling: repetition penalty + block (anti-loop)
-A small diffusion LM loops on high-frequency patterns ("the sky is blue, the sky is blue...") — bidirectional
-sampling has no generation history (each position predicted independently), unlike AR's causal constraint.
-- `repetition_penalty` (default 1.3): down-weights already-revealed response tokens. 1.0 deadlocks, 1.2–1.5 sweet spot, 2.0 forces gibberish.
-- `block_length` (default 0): >0 enables semi-AR block generation (LLaDA 2 idea) — AR across blocks, diffusion within, later blocks see earlier clean blocks.
+| Written source | Reported observation | Evidence available now |
+|---|---|---|
+| Loss-change commit (`fb96b34`) | 23M screening: about 5% versus 25.5% masked-reconstruction accuracy, the latter at 3,000 steps | Commit message only; no matching logs |
+| [Early README](https://github.com/adenzhou1350/minimind-diffusion/blob/c08099625cbd36fec3bad8b2600d0f4036da03c2/README.md) | 0–5% for the old implementation; a later result labeled 64M reports 41.5% and loss 7.4→1.7 | No public record establishing identical data, training budget and evaluation settings |
 
-Effect: from "deadlocked repetition" → "coherent multi-sentence Chinese".
+**0–5% → 41.5% is not a controlled estimate of the gain from changing the loss alone.** Masked-reconstruction accuracy is also not question-answer accuracy. The [four-way screening script](screen_loss.py) can be inspected and rerun, but uses a 256×4 configuration; its presence does not substantiate the 64M result.
 
-### 7.3 The scale wall: can talk, can't converse (text side)
-64M + mini corpus (900k samples) trained to 2 epochs, base model:
-- ✅ Produces **coherent Chinese** (language modeling learned)
-- ✅ **Answers some questions for real** ("what's your name" → self-intro; "how to learn programming" → Python/Codecademy tips)
-- ❌ **Unstable**: still slips into continuation mode ("what's 1+1" → starts listing "-2 squared is..." math problems)
-- ❌ **Knowledge hallucination** ("1+1=0.2133", "Mercury reflects the sun")
-- ❌ **Ignores context across turns**
+The extra `1/t` weight, mask range, model size and training steps may all matter. The old implementation divides by the number of masked tokens before multiplying by `1/t`, so the full normalization needs its own review. The earlier explanation that easy cases dominate gradients remains a hypothesis without gradient measurements or controlled ablations.
 
-Diagnosis: a **train/inference distribution gap** (training masks part, inference masks the whole start; a small
-model can't bridge it) + **insufficient scale** (LLaDA's 8B+2.3T pins it, 64M can't). Multi-epoch has diminishing
-returns (1→2 epoch, acc 41→44, +3 pts) — it hits the scale wall. A qualitative jump to "stable conversation"
-needs a bigger model / more data, beyond minimind's tier.
+### 7.2 Sampling: repetition penalty and blocks
 
-### 7.4 VLM: learns the format, not how to see (multimodal side)
-Ported minimind-v's "inherit the LLM + <50-line vision path" to the diffusion side: vision tokens injected as
-an **observation condition** (fill placeholders, never masked), diffusion loss still on text. Two stages
-(alignment trains projector only → SFT unfreezes first/last layers).
+Historical trial runs produced repeated phrases; some examples became more coherent after adding repetition penalties and blocks. No common prompt set, saved outputs and seeds accompany that observation, so it does not establish a consistent quality gain.
 
-Stage 2 SFT is complete (end of epoch, 22691 steps, ~30h, final loss 2.14, a noisy 1.8–2.4 plateau with no
-downward trend). Honest final-eval conclusions:
+The implementation down-weights revealed response tokens with `repetition_penalty` and fixes earlier blocks when `block_length > 0`. [Sampling tests](tests/test_sampling.py) check output length, removal of mask tokens and execution of sampling branches; they do not measure language quality.
 
-- ✅ **Learned the VQA format/behavior**: clean ChatML, no token leakage, coherent sentences, on-topic (with emotional associations) for color questions
-- ❌ **Did not learn grounding**: swapping images produces the same hallucination (cookies on a table → "summer night / nature scene"; a classical oil painting → "oranges in a forest"; heart + text → "white background / font") — the image is essentially ignored
-- ⚠️ **Collapses without an image**: with `<|image_pad|>` placeholders but no image → collapses into an `<|im_start|>assistant` loop (placeholder positions are always overwritten by vision features during training, so bare placeholders are out-of-distribution); pure text with no placeholders → falls back to the text-side scale wall (§7.3)
+### 7.3 Text: sentence generation with unreliable dialogue
 
-Diagnosis: the same scale wall as §7.3 — 64M can't pin multimodal alignment, and the vision tokens act more
-like a "**format trigger**" (keeping the model in the descriptive-ChatML region) than a real grounding signal.
-The achieved goal is a **working minimal "diffusion + visual condition" pipeline**, not a SOTA VLM. Real
-grounding likewise needs a bigger base + more image-text data.
+The [early README](https://github.com/adenzhou1350/minimind-diffusion/blob/c08099625cbd36fec3bad8b2600d0f4036da03c2/README.md) describes a run as 64M, about 900k training examples and 2 epochs. Its sample observations were:
 
-### 7.5 Other
-- **`<mask>` init**: standard learnable init (matching LLaDA official; mean/zero init showed no improvement after screening, see `screen_init.py`)
-- **Not in this repo**: DPO/LoRA/RL/distillation (LLaDA 2 block diffusion partially implemented) — independent follow-ups, outside the minimal teaching scope
-- **Data loading (text)**: stdlib json + byte-offset index, no datasets/pandas/pyarrow dependency (pyarrow crashes on import under Python 3.14 in this environment)
-- **Data loading (VLM)**: parquet read **row-group by row-group** via pyarrow (`read_row_group` into Python lists), not a one-shot full-column `read` — the latter asks Arrow for a single 20GB+ contiguous buffer and fails realloc (`ArrowMemoryError`), which was the earlier SFT hang
+- Some coherent Chinese outputs and relevant answers to self-introduction or learning-to-program prompts.
+- Continuations instead of answers, incorrect arithmetic and factual statements, and unreliable use of conversation context.
+- A reported reconstruction change of roughly 41%→44% from epoch 1 to 2, without published evaluation data or logs.
+
+Partial masking during training and all-mask starts at inference may create a distribution gap. Model size, data, training and sampling choices also deserve investigation. The available record does not identify the bottleneck or establish that a larger model would resolve it.
+
+### 7.4 VLM: learned formatting, unreliable image grounding
+
+Encoded images fill `<|image_pad|>` positions, which are never masked. Training first aligns the projector, then unfreezes selected language-model layers. See the [vision model](model/model_dlm_v.py), [alignment trainer](trainer/train_pretrain_vlm.py) and [SFT trainer](trainer/train_sft_vlm.py).
+
+The [historical README](https://github.com/adenzhou1350/minimind-diffusion/blob/24a64b72f876fcc5e3aad2c7ffe0b08277f6914c/README.md) reports 22,691 Stage 2 steps, about 30 hours, and final loss 2.14 (roughly 1.8–2.4 during training). These lack matching logs and are not runtime estimates for the current configuration.
+
+It records ChatML and image-description formatting, but similar hallucinations after changing the image; leaving image placeholders without supplying an image caused repetition. Per-image predictions and image-swap/no-image controls are not published, so these remain failure observations rather than a quantitative grounding evaluation.
+
+The suggestion that visual tokens act as a format trigger is a hypothesis. Useful next checks are image-swap sensitivity, projector gradients and freezing settings before attributing the result to model or data scale.
+
+### 7.5 Other implementation and experiment boundaries
+
+- **Mask initialization:** [screen_init.py](screen_init.py) defines random / mean / zero configurations. Historical notes report no improvement, without raw outputs.
+- **Data loading:** the text [JSONL index](dataset/lm_dataset.py) uses stdlib json and byte offsets; the [parquet loader](dataset/vlm_dataset.py) reads row groups.
+- **Not included:** trained weights, datasets or DPO / LoRA / RL / distillation workflows. Start with the [tests requiring no model download](#first-run-small-cpu-tests), then prepare training assets.
 
 ---
 

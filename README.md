@@ -6,7 +6,7 @@
 
 从 PyTorch 的双向注意力和掩码损失开始，串起训练、采样与可视化，再尝试加入图像条件。适合想亲手比较扩散生成与自回归、而不只停留在论文示意图的读者。
 
-[先跑小模型测试](#先跑一个不用下载模型的例子) · [核心原理](#2-核心原理) · [文本训练](#3-快速开始文本-dlm) · [图文实验](#4-扩展多模态-vlm) · [实验记录](#7-已知问题--诚实记录) · [作者的教学专区](https://adenzhou1350.github.io/learn/)
+[先跑小模型测试](#先跑一个不用下载模型的例子) · [核心原理](#2-核心原理) · [文本训练](#3-快速开始文本-dlm) · [图文实验](#4-扩展多模态-vlm) · [实验出处](docs/experiment-evidence.md) · [作者的教学专区](https://adenzhou1350.github.io/learn/)
 
 ## 你会沿着哪条路径学习
 
@@ -37,7 +37,7 @@ python -m pytest tests/test_model.py tests/test_loss.py -q
 
 这组测试使用随机初始化的小模型，检查张量形状、双向注意力和掩码损失，不需要 tokenizer、数据集或 checkpoint。测试通过只代表这些基础行为符合预期，生成效果需要另行训练和评估。
 
-想继续训练：[文本流程](#3-快速开始文本-dlm) · [图文流程](#4-扩展多模态-vlm) · [已有实验记录与局限](#7-已知问题--诚实记录)
+想继续训练：[文本流程](#3-快速开始文本-dlm) · [图文流程](#4-扩展多模态-vlm) · [已有实验记录与局限](#7-已知问题--诚实记录) · [筛选脚本与数据口径](docs/experiment-evidence.md)
 
 `minimind-diffusion` 把 [minimind](https://github.com/jingyaogong/minimind) 的"从 0 用 PyTorch 训一个小 LLM"的极简哲学,
 移植到**扩散式语言模型 (Diffusion Language Model, DLM)** 上:不左到右一个个生成 token,
@@ -86,7 +86,7 @@ JSONL 数据、vocab 6400 BPE、双语注释、`🌏🌎🌍` 分段。多模态
 同样只在文本 DLM 上加一条 <50 行的视觉路径,对照 minimind-v 的"LLM 继承 + 极简 vision"范式。
 
 **这个仓库适合谁**:想**从 0 验证一个扩散模型能不能训起来**、看清"掩码扩散 vs 自回归"
-每一处工程差别的人。它不追 SOTA —— 它把最小可跑通的 pipeline 和**真实的规模墙**都摊开给你看(§7)。
+每一处工程差别的人。仓库提供训练和采样代码，也保留了未能稳定对话、未能可靠看图的历史记录（§7）。
 
 ---
 
@@ -104,16 +104,16 @@ JSONL 数据、vocab 6400 BPE、双语注释、`🌏🌎🌍` 分段。多模态
 - `t=0`:全干净;`t=1`:全掩。
 - 掩码比例**随 t 线性增长**——这是跟 BERT(固定 15%)的关键区别。
 
-### 2.3 原始训练 loss（当前代码已改为均匀权重）
+### 2.3 当前训练 loss：均匀加权的掩码 CE
 ```
-L(θ) = - E[ (1/t) · Σ_{被掩位 i} CE(p_θ(x_0^i | x_t), x_0^i) ]
+每条序列：sum(被掩位置的 CE) / max(被掩 token 数, 1)
+一个 batch：对各序列的 loss 取平均
 ```
-- 只在**被掩位置**算交叉熵。
-- **1/t 权重是灵魂**:t 小(少掩、易还原)权重大;t 大(多掩、难)权重小。
-  这让 L(θ) 成为负对数似然的**上界**——区别于 BERT/MaskGIT 的均匀加权启发式。
-  直觉:t 大时模型几乎在猜数据边缘分布,不该被过度惩罚;t 小时模型该把"简单还原"学好,权重给大。
+- 只在**被掩位置**算交叉熵；padding 不参与，SFT 进一步限制在回答部分。
+- 当前采样 `t ~ U(0.1, 0.5)`，没有额外的 `1/t` 权重。
+- 对照阅读：[实际实现](model/model_dlm.py)与[掩码损失测试](tests/test_loss.py)。
 
-> 实测这个"严谨"配方在小模型上**不工作**,最后改成了均匀权重 —— 见 §7.1 的诚实记录。
+旧实现会在上述每序列平均 loss 上再乘 `1/t`。这是本仓库早期实现与当前实现的差别，不能据此判断 LLaDA 官方配方是否适合小模型；历史记录和缺失的证据见[实验出处](docs/experiment-evidence.md)。
 
 ### 2.4 架构:LLaMA 去掉 causal mask
 双向 transformer = 标准 LLaMA decoder,**关掉 causal mask**(`is_causal=False`)。
@@ -232,11 +232,9 @@ intermediate_size = ceil(π·768/64)*64, rope_theta=1e6, tied embeddings
 ```
 较小训练配置:`hidden_size=512, num_hidden_layers=6`。
 
-采样默认:`steps=128, gen_length=128, temperature=0.7, repetition_penalty=1.3, low_confidence=True`。
-- 论文最优是 `steps ≈ gen_length`(慢);教学版 128 够演示。
-- `temperature=0` 会塌缩成重复高频 token(扩散特性,与 AR 相反);建议 **0.6–0.9**,>0.9 开始乱说。
-- `repetition_penalty` 1.2–1.5 打散重复(扩散双向无生成历史,易循环);1.0 关闭会死循环,2.0 太狠逼出乱码。
-- `block_length` >0 启用半自回归块生成(LLaDA 2 思路),需整除 gen_length;更防重复但更短促。
+[`eval_dlm.py`](eval_dlm.py) 的采样默认：`steps=64, gen_length=128, temperature=0.7, repetition_penalty=1.3`。模型方法本身的默认温度不同，请以所用入口为准。
+- 历史试跑中，`temperature=0` 容易重复；`0.6–0.9` 和 `repetition_penalty=1.2–1.5` 曾被用作调参范围。这些观察没有附统一评测，不能保证对其他权重有效。
+- `block_length > 0` 启用半自回归块生成，需整除 `gen_length`；块间固定已生成内容，块内迭代揭开 token。实现见 [generate](model/model_dlm.py)。
 
 ---
 
@@ -248,7 +246,7 @@ intermediate_size = ceil(π·768/64)*64, rope_theta=1e6, tied embeddings
 | 注意力 | causal | 双向 |
 | KV cache | 有 | 无 |
 | 时间步 t | 无 | 有,不喂模型 |
-| loss | next-token CE | 均匀加权掩码 CE(原 1/t 在小模型失效,见 §7.1) |
+| loss | next-token CE | 均匀加权掩码 CE（旧实现对比见 §7.1） |
 | dataset 返回 | (input_ids, labels) | (input_ids, attention_mask[, response_mask]) |
 | 掩码在哪 | 无 | forward 里现采(每步随机) |
 | generate | AR + KV cache | 扩散采样 + low-conf remasking |
@@ -264,48 +262,54 @@ intermediate_size = ceil(π·768/64)*64, rope_theta=1e6, tied embeddings
 
 ## 7. 已知问题 / 诚实记录
 
-> 这一节是这个仓库最有价值的部分:一个 64M 扩散模型**能学到什么、学不到什么**,保留原有实验记录。下述指标尚未在本次文档更新中复跑；原因分析属于实验假设，不能直接推广到其他模型或规模。
+这一节保留历史试跑的观察。**公开仓库和可取得的 master 历史没有附对应原始日志、逐样本结果或 checkpoint**，因此下面的数字不作为已复现的 benchmark。代码、文字记录的固定版本和缺失项集中在[实验出处](docs/experiment-evidence.md)；本次只核对文档与源码，没有重跑训练。
 
-### 7.1 loss 配方:从 LLaDA 的 1/t 改成均匀权重(关键发现)
-原版 LLaDA 用 `1/t` 加权掩码 CE(数学上是似然上界,严谨),`t~U(0,1)`。但**在小模型 + 少数据上不工作**:held-out 掩码重建准确率只有 **0–5%**。
+### 7.1 loss 配方：当前实现与历史记录
 
-诊断:1/t 权重让梯度被"少掩 easy case"主导(小 t 时 1/t 爆炸),模型只学了 token 边缘分布,没学"根据上下文还原"。用 4 个对照组筛选后,**均匀权重 + `t~U(0.1,0.5)`** 把准确率拉到 **41.5%**(64M),收敛曲线也健康(loss 7.4→1.7)。
+当前代码使用均匀加权的掩码 CE，`t ~ U(0.1, 0.5)`。这项改动可以从 [loss 修改提交](https://github.com/adenzhou1350/minimind-diffusion/commit/fb96b344f5e58b7f9074de72e19473afdee67927)核对。
 
-代价:不再是严格的扩散似然上界(NELBO),更像 BERT-style MLM + 扩散采样。**去噪匹配目标仍在做,采样数学没动**,只是权衡的权重不最优了。LLaDA 2 自己也截断 mask 比例到 `[α_min,α_max]`,本改动踩在同一路径上。诚实标:偏离原版,换小模型可学性。
+历史文字中有两组不同记录：
 
-### 7.2 采样:repetition penalty + block(防重复循环)
-小扩散 LM 会无限重复高频模式("天空是蓝色的,天空是蓝色的...")——双向采样无生成历史(每个位置独立预测),不像 AR 有 causal 约束。
-- `repetition_penalty`(默认 1.3):对已揭开的 response token 降权。1.0 死循环,1.2-1.5 甜区,2.0 逼出乱码。
-- `block_length`(默认 0):>0 启用半自回归块生成(LLaDA 2 思路),块间自回归、块内扩散,后面块能看到前面已生成的干净块。
+| 文字出处 | 当时记下的结果 | 现在能确认什么 |
+|---|---|---|
+| loss 修改提交（`fb96b34`） | 23M 筛选，约 5% 与 25.5% 掩码重建准确率，后者为 3,000 步 | 提交说明中的观察，没有随附日志 |
+| [早期 README](https://github.com/adenzhou1350/minimind-diffusion/blob/c08099625cbd36fec3bad8b2600d0f4036da03c2/README.md) | 旧实现 0–5%；后续标为 64M 的记录为 41.5%，loss 7.4→1.7 | 无法从公开材料确认同数据、同训练预算和同评测设置 |
 
-效果:从"死循环重复"→"通顺连贯多句中文"。
+因此不能把 **0–5% → 41.5%** 当成只改 loss 得到的受控提升，也不能把掩码重建准确率当作问答准确率。[四组筛选脚本](screen_loss.py)仍可阅读和重新运行，但它使用 256×4 的配置；脚本本身不是 64M 结果的原始证据。
 
-### 7.3 规模墙:能说不能对话(文本侧现状)
-64M + mini 语料(90万条)训到 2 epoch,base 模型:
-- ✅ 能产出**通顺连贯的中文**(语言建模学会了)
-- ✅ **部分问题能真回答**("你叫什么名字"→自我介绍;"如何学习编程"→给 Python/Codecademy 建议)
-- ❌ **不稳**:仍会滑回续写模式("1+1等于几"开始列 "-2的平方是..." 数学题)
-- ❌ **知识幻觉**("1+1=0.2133"、"水星反射太阳")
-- ❌ **多轮不看上文**
+额外的 `1/t` 权重、掩码范围、模型大小和训练步数都可能影响结果。旧实现先除以被掩 token 数，再乘 `1/t`，完整归一化方式也需要单独核对。此前“容易样本主导梯度”的解释只是假设，尚无梯度统计和单变量对照支持。
 
-诊断:**训练/推理分布 gap**(训练只掩部分,推理全掩开头,小模型跨不过)+ **模型与数据规模可能不足**(LLaDA 原版 8B+2.3T 压住,64M 压不住)。多 epoch 边际递减(1→2 epoch,acc 41→44,+3 个点),撞到规模墙。要质变到"稳定对话",需更大模型 / 更多数据——超出 minimind 同档范围。
+### 7.2 采样：重复惩罚与分块
 
-### 7.4 VLM:学会格式,学不会看图(多模态侧现状)
-把 minimind-v 的"LLM 继承 + <50 行 vision 路径"思路搬到扩散侧:vision token 作为**观测条件**注入(填占位符、永不掩),扩散 loss 仍在文本侧做。两阶段(对齐只训 projector → SFT 解冻首尾层)。
+历史试跑中出现过“天空是蓝色的”一类重复输出；加入重复惩罚和分块后，部分样例更通顺。没有保存统一提示集、输出和随机种子，不能据此报告稳定的质量提升。
 
-Stage2 SFT 已完成(epoch 末 22691 步,~30h,final loss 2.14,全程 loss 是 1.8–2.4 的噪声平台无下降趋势)。最终 eval 诚实结论:
+当前实现可以核对两件事：`repetition_penalty` 会对已揭开的回答 token 降权；`block_length > 0` 会固定前面的块，再生成后面的块。[采样测试](tests/test_sampling.py)检查输出长度、mask 是否清除及不同分支能否运行，不评估语言质量。
 
-- ✅ **学会 VQA 格式/行为**:干净 ChatML、无 token 泄漏、句子通顺、颜色类问题 on-topic 带情感联想
-- ❌ **没学会 grounding**:换图输出同款幻觉(桌上饼干→"夏日夜景/自然风景";古典油画→"森林里的橙子";心形+文字→"白色背景/字体")——图基本被忽略
-- ⚠️ **不带图会塌**:带 `<|image_pad|>` 占位符但不传图 → 塌成 `<|im_start|>assistant` 死循环(占位符位训练时永远被视觉特征盖掉,裸占位符是分布外);纯文本零占位符 → 掉回文本侧的规模墙(§7.3)
+### 7.3 文本：能生成句子，对话仍不稳定
 
-诊断:同 §7.3 的规模墙 —— 64M 压不住多模态对齐,视觉 token 实际更像一个"**格式触发器**"(把模型维持在描述性 ChatML 区)而非真正的 grounding 信号。达成的目标是**跑通"扩散 + 视觉条件"的最小 pipeline**,不是追 SOTA VLM。要真 grounding,同样需要更大 base + 更多图文数据。
+[早期 README](https://github.com/adenzhou1350/minimind-diffusion/blob/c08099625cbd36fec3bad8b2600d0f4036da03c2/README.md)将一次训练记为 64M、约 90 万条语料、2 epoch，并记录了以下样例现象：
 
-### 7.5 其他
-- **`<mask>` 初始化**:标准可学习 init(跟 LLaDA 官方一致;mean/zero init 筛选后无改善,见 `screen_init.py`)
-- **本 repo 不含**:DPO/LoRA/RL/蒸馏(LLaDA 2 block diffusion 部分实现)—— 这些是独立的后续方向,不在最小教学范围内
-- **数据加载**:文本侧用 stdlib json + 字节偏移索引,不依赖 datasets/pandas/pyarrow(pyarrow 在 Python 3.14 本环境 import 崩溃)
-- **VLM 数据加载**:parquet 用 pyarrow **按行组流式读**(`read_row_group` 逐组灌进 Python list),不一次性 `read` 全列——后者会向 Arrow 索要一块 20GB+ 连续 buffer,realloc 失败(`ArrowMemoryError`),此前是 SFT 卡死根因
+- 有些输出是通顺的中文，也能回答部分自我介绍、学习编程类问题。
+- 有时会把问题续写成别的内容，出现错误算术和事实陈述，多轮上下文利用不稳定。
+- 曾记下 1→2 epoch 的重建准确率约 41%→44%，但对应的评测数据和日志没有发布。
+
+训练时只遮住部分 token、推理时从全 mask 开始，可能带来分布差异。模型规模、数据、训练和采样设置也都值得检查。现有记录不足以确定瓶颈，更不能证明扩大模型就能解决对话问题。
+
+### 7.4 VLM：学会格式，学不会看图（多模态侧现状）
+
+视觉路径将编码后的图片填入 `<|image_pad|>`，这些位置不参与掩码；训练分为 projector 对齐和部分语言模型层解冻两阶段。实现见[视觉模型](model/model_dlm_v.py)、[对齐训练](trainer/train_pretrain_vlm.py)和 [SFT](trainer/train_sft_vlm.py)。
+
+[当时的 README](https://github.com/adenzhou1350/minimind-diffusion/blob/24a64b72f876fcc5e3aad2c7ffe0b08277f6914c/README.md)记下 Stage 2 完成 22,691 步、约 30 小时、最终 loss 2.14（过程约 1.8–2.4）。这些是未附训练日志的历史值，不是当前配置的耗时承诺。
+
+当时观察到：输出具备 ChatML 和描述图片的格式，但换图后仍出现相似幻觉；保留图片占位符却不传图时，会出现重复输出。公开材料没有逐图预测或换图、去图对照集，所以这里保留的是失败观察，不能量化 grounding 能力。
+
+“视觉 token 更像格式触发器”是待验证的解释。后续应先检查图片替换是否改变输出、projector 梯度和冻结设置，再讨论模型与数据规模。
+
+### 7.5 其他实现与实验边界
+
+- **mask 初始化**：[screen_init.py](screen_init.py)包含 random / mean / zero 三组设置；历史上记为未见改善，但没有对应原始输出。
+- **文本数据加载**：[JSONL 索引](dataset/lm_dataset.py)使用 stdlib json 与字节偏移；图文的 [parquet 加载](dataset/vlm_dataset.py)按行组读取。
+- **仓库不包含**：训练权重、数据集、DPO / LoRA / RL / 蒸馏流程。先从[无需下载模型的测试](#先跑一个不用下载模型的例子)读懂机制，再准备训练资产。
 
 ---
 
